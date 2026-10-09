@@ -278,23 +278,7 @@ export async function tuiCommand(args: string[]): Promise<number> {
   });
   orchestratorForChannelStatus = orchestrator;
 
-  // First signal quits gracefully; a repeat (a wedged shutdown being
-  // Ctrl-C'd again, a `kill` after a hang) restores the terminal —
-  // mouse reporting off, alt screen left — and exits hard, instead of
-  // Node's default kill that skips `exit` hooks and leaves the shell
-  // printing `[<0;64;21M` on every click. See `signal-escalation.ts`.
-  const onSignal = makeEscalatingSignalHandler({
-    quit: () => orchestrator.quit(),
-    restoreTerminal: restoreTerminalNow,
-    exit: (code) => process.exit(code),
-  });
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  // SIGHUP fires when the terminal window is closed. Without a handler
-  // the default action kills the process before `orchestrator.shutdown()`
-  // runs, orphaning the managed llama-server with the model still in
-  // RAM/VRAM — the exact complaint in #52.
-  process.on("SIGHUP", onSignal);
+
 
   // Mark this process as a live TUI session so `stopOnExit` teardown can
   // tell "last session exits, stop the daemon" from "another window is
@@ -824,6 +808,27 @@ export async function tuiCommand(args: string[]): Promise<number> {
       kittyKeyboard,
     }),
   );
+
+  // First signal quits gracefully; a repeat (a wedged shutdown being
+  // Ctrl-C'd again, a `kill` after a hang) restores the terminal —
+  // mouse reporting off, alt screen left — and exits hard, instead of
+  // Node's default kill that skips `exit` hooks and leaves the shell
+  // printing `[<0;64;21M` on every click. See `signal-escalation.ts`.
+  const onSignal = makeEscalatingSignalHandler({
+    quit: () => {
+      orchestrator.quit();
+      ink.unmount();
+    },
+    restoreTerminal: restoreTerminalNow,
+    exit: (code) => process.exit(code),
+  });
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  // SIGHUP fires when the terminal window is closed. Without a handler
+  // the default action kills the process before `orchestrator.shutdown()`
+  // runs, orphaning the managed llama-server with the model still in
+  // RAM/VRAM — the exact complaint in #52.
+  process.on("SIGHUP", onSignal);
 
   orchestrator.start();
 

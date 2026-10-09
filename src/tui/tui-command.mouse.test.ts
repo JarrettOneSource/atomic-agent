@@ -157,6 +157,7 @@ interface Booted {
   readonly actions: TuiAction[];
   /** Chat-bound `system_message` texts, in emit order. */
   readonly messages: string[];
+  readonly finished: Promise<number>;
   readonly stop: () => Promise<number>;
 }
 
@@ -179,7 +180,7 @@ async function bootTui(args: string[] = []): Promise<Booted> {
     ) => {
       props = element.props;
       renderOptions = options;
-      return { waitUntilExit: () => exited, clear: () => {} };
+      return { waitUntilExit: () => exited, unmount: releaseExit, clear: () => {} };
     },
   );
 
@@ -219,6 +220,7 @@ async function bootTui(args: string[] = []): Promise<Booted> {
     seen,
     actions,
     messages,
+    finished,
     stop: async () => {
       releaseExit();
       return finished;
@@ -399,6 +401,23 @@ describe("tuiCommand mouse wiring", () => {
     stdin.emit("data", sgrPress(5, 3));
     expect(app.seen).toHaveLength(0);
     await app.stop();
+  });
+
+  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)("%s closes the renderer and completes TUI shutdown", async (signal) => {
+    writeMouseConfig(false);
+    const before = process.listeners(signal);
+    const app = await bootTui();
+    const added = process.listeners(signal).filter((listener) => !before.includes(listener));
+    expect(added).toHaveLength(1);
+    let finished = false;
+    void app.finished.then(() => { finished = true; });
+    try {
+      added[0]!(signal);
+      await vi.waitFor(() => expect(finished).toBe(true), { timeout: 200 });
+      expect(process.listeners(signal)).not.toContain(added[0]);
+    } finally {
+      await app.stop();
+    }
   });
 
   it("a second signal restores the terminal and exits instead of hanging", async () => {
