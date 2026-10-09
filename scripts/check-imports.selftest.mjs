@@ -105,6 +105,7 @@ for (const owner of ['config-values', 'mcp-server-config']) {
 fixture('shared config values cannot depend on MCP config', { 'src/config/config-values.ts': 'import "./mcp-server-config.js";', 'src/config/mcp-server-config.ts': '' }, rejects(/config values depends on MCP configuration/));
 fixture('MCP config depends inward on shared values and neutral types', { 'src/config/config-schema.ts': 'export { value } from "./mcp-server-config.js";', 'src/config/mcp-server-config.ts': 'import "./config-values.js"; import "./config-primitives.js"; import "./config-validation-error.js"; import type { A } from "../mcp/mcp-types.js"; export const value = 1;', 'src/config/config-values.ts': 'import "./config-primitives.js"; import "./config-validation-error.js";', 'src/config/config-primitives.ts': '', 'src/config/config-validation-error.ts': '', 'src/mcp/mcp-types.ts': 'export type A = string;' }, clean);
 const localModelsNegativeCases = [
+  ['types cannot execute gateway contracts', 'local-models-types', 'import "../../local-llm/gateways/model-gateway-types.js";', 'src/local-llm/gateways/model-gateway-types.ts', '', /local models config types depend outside type owners/],
   ['types cannot import composition types', 'local-models-types', 'import type { A } from "../config-schema.js";', 'src/config/config-schema.ts', 'export type A = string;', /local models config types depend outside type owners.*type-only/],
   ['types cannot load an allowed type owner at runtime', 'local-models-types', 'import "../../local-llm/catalog/models-catalog.js";', 'src/local-llm/catalog/models-catalog.ts', '', /local models config types depend outside type owners/],
   ['types cannot dynamically load an allowed type owner', 'local-models-types', 'void import("../../local-llm/server/swa-full.js");', 'src/local-llm/server/swa-full.ts', '', /local models config types depend outside type owners/],
@@ -117,10 +118,17 @@ const localModelsNegativeCases = [
   ['parser cannot import composition', 'local-models-parser', 'import "../config-schema.js";', 'src/config/config-schema.ts', '', /local models parser depends outside concrete configuration helpers/],
   ['parser cannot import root API types', 'local-models-parser', 'import type { A } from "../index.js";', 'src/config/index.ts', 'export type A = string;', /local models parser depends outside concrete configuration helpers.*type-only/],
   ['parser cannot dynamically load server lifecycle', 'local-models-parser', 'void import("../../local-llm/server/daemon-lifecycle.js");', 'src/local-llm/server/daemon-lifecycle.ts', '', /local models parser depends outside concrete configuration helpers/],
+  ['parser cannot execute gateway networking', 'local-models-parser', 'import "../../local-llm/gateways/model-gateway-client.js";', 'src/local-llm/gateways/model-gateway-client.ts', '', /local models parser depends outside concrete configuration helpers/],
 ];
 for (const [name, owner, content, target, targetContent, pattern] of localModelsNegativeCases) {
   fixture(`local models ${name}`, { [`src/config/local-models/${owner}.ts`]: content, [target]: targetContent }, rejects(pattern));
 }
+fixture('gateway config uses its concrete validator and neutral host contracts', {
+  'src/config/local-models/local-models-types.ts': 'import type { Host } from "../../local-llm/gateways/model-gateway-types.js"; export type Hosts = Host[];',
+  'src/config/local-models/local-models-parser.ts': 'import "./gateway-config.js";',
+  'src/config/local-models/gateway-config.ts': '',
+  'src/local-llm/gateways/model-gateway-types.ts': 'export interface Host { id: string }',
+}, clean);
 fixture('local models configuration composes concrete type/constant/validation owners', {
   'src/config/config-schema.ts': 'import "./local-models/local-models-defaults.js"; export { value } from "./local-models/local-models-parser.js";',
   'src/config/local-models/local-models-types.ts': 'import type { A } from "../../local-llm/catalog/models-catalog.js"; import type { A as B } from "../../local-llm/backend/windows-backend-variant.js"; import type { A as C } from "../../local-llm/server/swa-full.js"; export type T = A | B | C;',

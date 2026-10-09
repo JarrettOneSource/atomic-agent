@@ -1,6 +1,7 @@
 import type { LocalModelDef } from "../../local-llm/catalog/models-catalog.js";
 import type { BackendVariantPreference } from "../../local-llm/backend/windows-backend-variant.js";
 import type { SwaFullPreference } from "../../local-llm/server/swa-full.js";
+import type { ModelGatewayDefinition } from "../../local-llm/gateways/model-gateway-types.js";
 
 export type LocalLlmMode = "external" | "managed";
 
@@ -186,6 +187,7 @@ export interface UserManagedEmbeddingLlmConfig {
 }
 
 export interface RuntimeLocalModelsConfig {
+  gateways: ModelGatewayDefinition[];
   url: string;
   apiKey: string | null;
   healthPath: string;
@@ -258,6 +260,7 @@ export interface RuntimeLocalModelsConfig {
 }
 
 export interface UserLocalModelsConfig {
+  gateways: ModelGatewayDefinition[];
   url: string;
   mode: LocalLlmMode;
   /**

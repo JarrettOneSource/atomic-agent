@@ -3,7 +3,7 @@
 Status: current
 Owner: src/tui/llm-panel/
 
-This feature composes Local, Cloud, External and Fallback panes. Read [TUI instructions](../AGENTS.md) and the domain instructions for [LLM](../../llm/AGENTS.md), [config](../../config/AGENTS.md) and [local models](../../local-llm/AGENTS.md) when changing their operations.
+This feature composes Local, Cloud, External, Fallback and Gateways panes. Read [TUI instructions](../AGENTS.md) and the domain instructions for [LLM](../../llm/AGENTS.md), [config](../../config/AGENTS.md) and [local models](../../local-llm/AGENTS.md) when changing their operations.
 
 ## Presentation and transitions
 

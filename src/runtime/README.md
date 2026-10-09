@@ -26,6 +26,12 @@ For tool integration read composition/runtime-tool-catalog.ts; for provider hot 
 
 ## Task-specific reading
 
+Configured [model gateways](../local-llm/gateways/README.md) are prepared inside
+the shared turn service, under the caller's cancellation signal. This covers CLI,
+TUI, HTTP, sidecar and scheduled work without starting models at application boot.
+The runtime owns task leases and closes them at turn completion or shutdown;
+the host gateway remains the owner of the actual model processes.
+
 Read docs/lifecycle.md before changing ownership, shutdown or steering; ../llm/docs/fallback.md before changing fallback wiring.
 
 ## Validation

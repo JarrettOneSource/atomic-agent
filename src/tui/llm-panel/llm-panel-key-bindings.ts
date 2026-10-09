@@ -12,6 +12,7 @@ import { cursorFieldFor } from "./llm-panel-state.js";
 import { handleFallbackPaneKey } from "./fallback/fallback-key-bindings.js";
 import { handleLocalModelsHfKey } from "../local-models/local-models-hf-keys.js";
 import { handleLlmLocalPaneKey } from "./llm-panel-local-keys.js";
+import { handleModelGatewaysKey } from "../model-gateways/model-gateways-key-bindings.js";
 import {
   activateProviderEmbedding,
   openAddProvider,
@@ -47,6 +48,9 @@ export function handleLlmPanelKey(
 
   const localHandled = handleLlmLocalPaneKey(input, key, ctx);
   if (localHandled !== null) return localHandled;
+
+  const gatewayHandled = handleModelGatewaysKey(input, key, ctx);
+  if (gatewayHandled !== null) return gatewayHandled;
 
   // The Fallback pane owns its own edit keys (move/add/remove/toggle) and
   // its add-link picker. It runs before the shared letter hotkeys so

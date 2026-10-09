@@ -14,6 +14,7 @@ const localModelTypeOwners = new Set([
   'src/local-llm/catalog/models-catalog.ts',
   'src/local-llm/backend/windows-backend-variant.ts',
   'src/local-llm/server/swa-full.ts',
+  'src/local-llm/gateways/model-gateway-types.ts',
 ]);
 const localModelDefaultOwners = new Set([
   'src/config/local-models/local-models-types.ts',
@@ -24,6 +25,7 @@ const localModelParserOwners = new Set([
   'src/config/local-models/local-models-types.ts',
   'src/config/config-primitives.ts', 'src/config/config-values.ts',
   'src/config/config-validation-error.ts', 'src/config/custom-models-schema.ts',
+  'src/config/local-models/gateway-config.ts',
   ...localModelTypeOwners,
   'src/local-llm/downloads/download-settings.ts',
   'src/local-llm/catalog/huggingface-endpoint.ts',

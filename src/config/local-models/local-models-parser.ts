@@ -7,6 +7,7 @@ import type {
   UserLocalModelsConfig,
 } from "./local-models-types.js";
 import { ConfigValidationError } from "../config-validation-error.js";
+import { parseModelGateways } from "./gateway-config.js";
 import {
   coerceIntLike,
   parseBool,
@@ -422,5 +423,6 @@ export function parseUserLocalModelsConfig(
     embeddings: embeddingsDaemon,
     download,
     customModels,
+    gateways: parseModelGateways(localModels.gateways),
   };
 }

@@ -1,6 +1,10 @@
 import type { LlmPanelMode, LlmPanelSection } from "./llm-panel-state.js";
+import type { ModelGatewaySnapshot } from "../../local-llm/gateways/model-gateway-types.js";
 
 export type LlmPanelAction =
+  | { type: "llm_gateways_refreshed"; hosts: readonly ModelGatewaySnapshot[] }
+  | { type: "llm_gateways_busy"; busy: boolean }
+  | { type: "llm_gateways_status"; message: string | null }
   | { type: "llm_mode_set"; mode: LlmPanelMode }
   | { type: "llm_mode_set_to_active_route" }
   | { type: "llm_mode_toggled" }
@@ -24,6 +28,9 @@ export function isLlmPanelAction(action: {
   type: string;
 }): action is LlmPanelAction {
   return (
+    action.type === "llm_gateways_refreshed" ||
+    action.type === "llm_gateways_busy" ||
+    action.type === "llm_gateways_status" ||
     action.type === "llm_mode_set" ||
     action.type === "llm_mode_set_to_active_route" ||
     action.type === "llm_mode_toggled" ||

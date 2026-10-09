@@ -1,6 +1,7 @@
 import type { CompactionResult, SessionCompaction } from "../session/session-compaction.js";
 import type { BuiltPrompt } from "../prompt/build-prompt-types.js";
 import type { AtomicAgentConfig } from "../config/index.js";
+import type { GatewayTaskManager } from "../local-llm/gateways/gateway-task-manager.js";
 import type { LlmStreamParams } from "../agent/step/step-contract.js";
 import type { TurnController } from "./turn-controller.js";
 import type { SteeringInbox } from "./steering-inbox.js";
@@ -326,6 +327,7 @@ export interface AgentRuntime {
    * `activeText` is the provider wired into `llmComplete` / sub-calls.
    */
   readonly providerRegistry: ProviderRegistry;
+  readonly gatewayTasks: GatewayTaskManager;
   readonly capabilities: CapabilitiesSummary;
   readonly skillCatalog: readonly SkillCatalogEntry[];
   /**

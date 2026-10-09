@@ -20,6 +20,7 @@ import { createRuntimeLifecycle } from "./composition/runtime-lifecycle.js";
 import { resolve } from "node:path";
 
 import { getConfig } from "../config/index.js";
+import { GatewayTaskManager } from "../local-llm/gateways/gateway-task-manager.js";
 import type { SessionState } from "../session/session-state.js";
 import { estimateTokens } from "../prompt/token-budget.js";
 
@@ -593,10 +594,27 @@ export async function createAgentRuntime(
   const { createSession, createEphemeralSession } = createRuntimeSessionFactories(workingDir, sessionStore, ensureRecorder);
   const previewPrompt = createRuntimePromptPreview(config, promptPreviewDeps);
 
+  const gatewayTasks = new GatewayTaskManager({
+    gateways: () => getConfig().localModels.gateways,
+    onLoading: (host, model) => logger.info("loading gateway model", { host, model }),
+    onUnavailable: (message) => logger.warn("gateway task lease unavailable", { message }),
+  });
   const { executeTurn, steer, runTurn } = createRuntimeTurnService(config, {
     sessions: { sessionStore, turnContext, turnRequests },
     execution: { loop, turnController, steeringInbox, shellJobs, slotManager, llmComplete },
-    inference: { providerRegistry, resolveActiveLlmSlice, resolveCurrentRunMode, resolveRouteVision, resolveActiveModelName, fallbackChain },
+    inference: {
+      providerRegistry, resolveActiveLlmSlice, resolveCurrentRunMode, resolveRouteVision, resolveActiveModelName, fallbackChain,
+      prepareGatewayModels: (ids, signal) => {
+        const fresh = getConfig();
+        const providers = resolveLlmConfig(fresh).providers;
+        const urls = ids.flatMap((id) => {
+          const provider = providers.find((entry) => entry.id === id);
+          const url = provider?.kind === "llama-server" ? fresh.localModels.url : provider?.baseUrl;
+          return url ? [url] : [];
+        });
+        return gatewayTasks.prepare(urls, signal);
+      },
+    },
     traces, telemetry: { observability, analyticsStateStore, turnUsageMeter },
     state: turnState, lifecycle, logger,
   });
@@ -645,6 +663,7 @@ export async function createAgentRuntime(
     swarm: null,
     mcpManager,
     providerRegistry,
+    gatewayTasks,
     capabilities,
     toolDescriptors: effectiveToolDescriptors(),
     grammar: getGrammar(),
@@ -676,7 +695,10 @@ export async function createAgentRuntime(
     setPlanMode: (on: boolean) => {
       planMode = on;
     },
-    shutdown,
+    shutdown: async () => {
+      gatewayTasks.close();
+      await shutdown();
+    },
   } as AgentRuntime & {
     telegramChannel: TelegramChannel | null;
     discordChannel: DiscordChannel | null;

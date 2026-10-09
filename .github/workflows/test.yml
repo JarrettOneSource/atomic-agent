@@ -20,10 +20,25 @@
 name: Test
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to validate
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit to validate (empty uses the selected branch)
+        required: false
+        type: string
   pull_request:
-    branches: [main]
+    branches: [main, jarrett/model-gateways]
   push:
-    branches: [main]
+    branches: [main, jarrett/model-gateways]
+
+permissions:
+  contents: read
 
 # A new push to the same PR supersedes the previous run.
 concurrency:
@@ -67,6 +82,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -131,3 +149,7 @@ jobs:
 
       - name: Run tests
         run: node scripts/run-tests.mjs ${{ matrix.scope }}
+
+      - name: Check media idle lifecycle
+        if: matrix.drop_canvas == 'false'
+        run: python3 scripts/gateways/test_media_idle.py

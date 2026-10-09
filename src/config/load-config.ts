@@ -152,6 +152,7 @@ export function loadConfig(): AtomicAgentConfig {
   return {
     dotenv,
     localModels: {
+      gateways: user.localModels.gateways.map((gateway) => ({ ...gateway })),
       url: resolvedLocalLlmUrl,
       // The operator's key, else the managed daemons' key (persisted next
       // to their pid file) whenever the agent talks to them — so every

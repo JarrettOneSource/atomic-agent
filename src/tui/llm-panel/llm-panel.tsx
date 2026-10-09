@@ -19,6 +19,7 @@ import { LocalModelDetail } from "../local-models/local-models-panel.js";
 import { hasLlmModal, LlmPanelModals } from "./llm-panel-modals.js";
 import { llmPanelDrawsPullBanner } from "../components/pull-bar-owner.js";
 import { renderProgressBar } from "../components/render-progress-bar.js";
+import { ModelGatewaysPanel } from "../model-gateways/model-gateways-panel.js";
 
 /**
  * Rows consumed by the full fixed chrome: RouteCard (~7) + ModeHeader (3)
@@ -46,6 +47,9 @@ export function LlmPanel({
   state: TuiState;
   maxRows?: number;
 }): ReactElement {
+  if (state.llmPanel.mode === "gateways") {
+    return <ModelGatewaysPanel state={state} maxRows={maxRows} />;
+  }
   const rows = selectLlmPanelRows(state);
   const summary = selectLlmActiveRouteSummary(state);
   const starting =
@@ -205,6 +209,7 @@ const MODE_LABELS: Record<LlmPanelMode, string> = {
   cloud: "Cloud",
   external: "External llama.cpp",
   fallback: "Fallback",
+  gateways: "Gateways",
 };
 
 /** Footer key hint, pane-specific for Fallback (its edit keys differ). */

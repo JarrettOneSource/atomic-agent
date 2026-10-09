@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decision workspace · Atomic</title>
+<style>
+  :root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; background: #141719; color: #e7ece9; }
+  body { margin: 0; padding: 28px 20px; }
+  main { max-width: 850px; margin: auto; }
+  a { color: #8fd6ad; } h1 { font-size: 28px; margin-bottom: 4px; }
+  p { color: #b4bdb8; } label { display: block; margin-top: 20px; font-weight: 600; }
+  textarea, input, button { box-sizing: border-box; font: inherit; }
+  textarea { display: block; width: 100%; margin-top: 8px; padding: 12px; border: 1px solid #46534b; border-radius: 6px; background: #202622; color: inherit; }
+  #questions, pre { font-family: ui-monospace, monospace; font-size: 14px; }
+  button { padding: 10px 18px; margin: 20px 8px 0 0; border: 0; border-radius: 6px; cursor: pointer; background: #a8e1bc; color: #112018; }
+  button:disabled { opacity: .5; cursor: wait; } .secondary { background: #35443b; color: #e7ece9; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 18px; background: #202622; border-radius: 6px; }
+  #status { min-height: 1.5em; } [hidden] { display: none; }
+</style>
+<main>
+  <a href="../">← Atomic Hub</a>
+  <h1 id="title">Decision workspace</h1>
+  <p>Start the model in Atomic, then ask it to classify or score a short input.</p>
+  <form id="form" autocomplete="off">
+    <label for="state">Input</label>
+    <textarea id="state" rows="4">I was charged twice for the same order. Please refund the extra charge today.</textarea>
+    <label for="questions">Questions</label>
+    <textarea id="questions" rows="10" spellcheck="false">{
+  "refund": {
+    "type": "noul",
+    "instructions": "Is the user requesting a refund?"
+  },
+  "team": {
+    "type": "choice",
+    "instructions": "Which team should handle this message?",
+    "criteria": {"billing": "Bills or refunds", "technical": "Technical issues"}
+  }
+}</textarea>
+    <label for="image">Optional image</label>
+    <input id="image" type="file" accept="image/png,image/jpeg,image/webp">
+    <p>Image requests support one question. Inputs and results are kept in this page until you leave or clear them.</p>
+    <button id="run" disabled>Run decision</button>
+    <button class="secondary" id="clear" type="button">Clear result</button>
+    <button class="secondary" id="download" type="button" hidden>Download result</button>
+  </form>
+  <p id="status" role="status" aria-live="polite">Loading workspace settings…</p>
+  <pre id="result" hidden></pre>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let settings, result;
+  fetch('./config.json', {cache: 'no-store'}).then(async (response) => {
+    if (!response.ok) throw new Error('Workspace settings are unavailable.');
+    settings = await response.json();
+    const endpoint = new URL(settings.endpoint);
+    if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) throw new Error('Invalid workspace endpoint.');
+    $('title').textContent = settings.name;
+    $('run').disabled = false;
+    $('status').textContent = 'Ready. This page does not start or keep the model loaded.';
+  }).catch((error) => {$('status').textContent = error.message;});
+
+  $('form').onsubmit = async (event) => {
+    event.preventDefault();
+    $('run').disabled = true;
+    $('status').textContent = 'Running decision…';
+    try {
+      const questions = JSON.parse($('questions').value);
+      const payload = {state: $('state').value, questions};
+      const file = $('image').files[0];
+      if (file) {
+        if (file.size > 4 * 1024 * 1024) throw new Error('Choose an image smaller than 4 MiB.');
+        if (Object.keys(questions).length !== 1) throw new Error('Use one question with an image.');
+        payload.image = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Could not read the image.'));
+          reader.readAsDataURL(file);
+        });
+      }
+      const response = await fetch(settings.endpoint, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload), cache: 'no-store',
+      });
+      if (response.status === 409) throw new Error('The model is stopped. Start it in Atomic, then try again.');
+      const body = await response.json();
+      if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : typeof body.error === 'string' ? body.error : `Request failed (${response.status}).`);
+      result = body;
+      $('result').textContent = JSON.stringify(result, null, 2);
+      $('result').hidden = false;
+      $('download').hidden = false;
+      $('status').textContent = 'Decision complete.';
+    } catch (error) {
+      $('status').textContent = error.message;
+    } finally {
+      $('run').disabled = false;
+    }
+  };
+  $('clear').onclick = () => {result = undefined; $('result').textContent = ''; $('result').hidden = true; $('download').hidden = true;};
+  $('download').onclick = () => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], {type: 'application/json'}));
+    const link = document.createElement('a'); link.href = url; link.download = 'decision.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+</script>
+</html>

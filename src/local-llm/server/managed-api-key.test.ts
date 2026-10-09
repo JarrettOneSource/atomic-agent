@@ -220,5 +220,19 @@ describe("managed llama-server api key (#582)", () => {
       ).toBeNull();
       expect(apiKeyForUrl("http://127.0.0.1:19091", config("k"), {})).toBe("k");
     });
+
+    it("uses each gateway's own credential only for its configured inference routes", () => {
+      const base = config(null, "http://127.0.0.1:18990/upstream/main");
+      const gateways = [
+        { id: "m5", name: "M5", url: "http://127.0.0.1:18990", apiKeyEnv: "M5_KEY" },
+        { id: "pc", name: "PC", url: "http://127.0.0.1:18991", apiKeyEnv: "PC_KEY" },
+      ];
+      const cfg = { ...base, localModels: { ...base.localModels, gateways } };
+      const env = { M5_KEY: "m5-key", PC_KEY: "pc-key" };
+      expect(apiKeyForUrl("http://127.0.0.1:18990/upstream/main", cfg, env)).toBe("m5-key");
+      expect(apiKeyForUrl("http://127.0.0.1:18991/upstream/worker", cfg, env)).toBe("pc-key");
+      expect(apiKeyForUrl("http://127.0.0.1:18992/upstream/worker", cfg, env)).toBeNull();
+      expect(apiKeyForUrl("http://127.0.0.1:18990/upstream/main", cfg, {})).toBeNull();
+    });
   });
 });

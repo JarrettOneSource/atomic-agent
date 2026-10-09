@@ -976,7 +976,9 @@ export interface UserConfigFile {
 // v75: known cloud providers without a saved modelMode adopt cloud context.
 // Explicit provider/model policies and local/unknown endpoints stay unchanged.
 // This one-time migration shares the classification used for new connections.
-export const USER_CONFIG_VERSION = 75;
+// v76: optional remote model gateways. Existing files keep an empty host list;
+// discovery and status never start inference processes.
+export const USER_CONFIG_VERSION = 76;
 
 /**
  * Config versions that `parseUserConfigFile` still accepts on input.
@@ -1127,6 +1129,7 @@ const SUPPORTED_INPUT_VERSIONS: readonly number[] = [
   72,
   73,
   74,
+  75,
   USER_CONFIG_VERSION,
 ];
 

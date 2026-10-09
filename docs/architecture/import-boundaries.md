@@ -54,6 +54,13 @@ Run `npm run imports:self-test` for disposable positive and negative projects co
 
 ## OS and managed-model owners
 
+Remote gateway configuration adds two concrete inward dependencies: the neutral
+host contracts in `src/local-llm/gateways/model-gateway-types.ts` and the validator
+in `src/config/local-models/gateway-config.ts`. The local-model types may import
+the contracts only as types; the parser may use the validator. Gateway HTTP and
+process operations remain outside configuration. Positive and negative checker
+fixtures cover these edges.
+
 [OS tools](../../src/tools/os/README.md) compose filesystem, shell and web operation owners while retaining registration/export order and existing archive/document/git/process/search/command-guard owners. [Managed local models](../../src/local-llm/README.md) expose the compatible root API and explicit downloads/server/backend/catalog owners. Root disk layout and source-depth-sensitive chat-template lookup stay at their previous location; no directory-level layering rule is inferred from grouping. The production gate rejects imports of the exact filesystem test helper and catalog GGUF byte fixtures, while ordinary test imports remain allowed.
 
 ## Execution and resource configuration owners

@@ -1,4 +1,5 @@
 import type { ModelPricingFilter } from "../../llm/provider/model-pricing-filter.js";
+import type { ModelGatewaySnapshot } from "../../local-llm/gateways/model-gateway-types.js";
 
 /**
  * Panes of the LLM tab. `local` browses the managed llama.cpp catalog,
@@ -6,7 +7,7 @@ import type { ModelPricingFilter } from "../../llm/provider/model-pricing-filter
  * llama-server the operator runs themselves, `fallback` the ordered
  * cross-provider fallover chain.
  */
-export type LlmPanelMode = "local" | "cloud" | "external" | "fallback";
+export type LlmPanelMode = "local" | "cloud" | "external" | "fallback" | "gateways";
 
 /** Left-to-right pane order, used by the ←/→ pane switch. */
 export const LLM_PANEL_MODES: readonly LlmPanelMode[] = [
@@ -14,6 +15,7 @@ export const LLM_PANEL_MODES: readonly LlmPanelMode[] = [
   "cloud",
   "external",
   "fallback",
+  "gateways",
 ];
 
 export type LlmPanelSection = LlmPanelMode;
@@ -28,6 +30,10 @@ export interface LlmPanelState {
   cloudCursor: number;
   externalCursor: number;
   fallbackCursor: number;
+  gatewayCursor: number;
+  gatewayHosts: readonly ModelGatewaySnapshot[];
+  gatewayBusy: boolean;
+  gatewayStatus: string | null;
   syncModeToActiveRoute: boolean;
   stopLocalDaemonsPrompt: LlmStopLocalDaemonsPrompt | null;
   /**
@@ -70,6 +76,10 @@ export function createInitialLlmPanelState(): LlmPanelState {
     cloudCursor: 0,
     externalCursor: 0,
     fallbackCursor: 0,
+    gatewayCursor: 0,
+    gatewayHosts: [],
+    gatewayBusy: false,
+    gatewayStatus: null,
     syncModeToActiveRoute: false,
     stopLocalDaemonsPrompt: null,
     externalUrlDraft: null,
@@ -83,7 +93,8 @@ export function createInitialLlmPanelState(): LlmPanelState {
 /** Which `LlmPanelState` cursor field belongs to a pane. */
 export function cursorFieldFor(
   mode: LlmPanelMode,
-): "localCursor" | "cloudCursor" | "externalCursor" | "fallbackCursor" {
+): "localCursor" | "cloudCursor" | "externalCursor" | "fallbackCursor" | "gatewayCursor" {
+  if (mode === "gateways") return "gatewayCursor";
   if (mode === "cloud") return "cloudCursor";
   if (mode === "external") return "externalCursor";
   if (mode === "fallback") return "fallbackCursor";

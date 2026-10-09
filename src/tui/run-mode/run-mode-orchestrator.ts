@@ -141,7 +141,11 @@ export class RunModeOrchestrator {
         return;
       }
     } else {
-      leg = rm.workerProviderId ?? "local-llama";
+      const localProviders = resolved.providers.filter((provider) => provider.kind === LOCAL_PROVIDER_KIND);
+      leg = localProviders.find((provider) => provider.id === resolved.activeTextProvider)?.id
+        ?? localProviders.find((provider) => provider.id === rm.workerProviderId)?.id
+        ?? localProviders[0]?.id
+        ?? "local-llama";
     }
 
     try {

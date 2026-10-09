@@ -27,6 +27,9 @@ Read docs/lifecycle.md for daemon edits and docs/downloads.md for download edits
 
 ## Operation owners
 
+- [Remote gateways](gateways/README.md): remote catalog/lifecycle and per-turn leases;
+  model processes remain owned by their host gateway.
+
 - [Downloads](downloads/README.md): transfers, durable jobs, detached spawn/workers and paired model/projector acquisition.
 - [Server](server/README.md): process/port/session/key/health ownership, launch policy, slots/context/SWA and throughput.
 - [Backend](backend/README.md): installation/staging/version/update, platform assets and hardware selection/probes.

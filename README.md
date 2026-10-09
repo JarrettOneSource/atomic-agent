@@ -4,6 +4,10 @@
 
 # Atomic Agent
 
+This fork adds a central [model gateway panel](docs/user/model-gateways.md) for
+on-demand models on multiple hosts, plus reviewed weekly upstream-update PRs.
+Existing model files and runtimes remain on their inference hosts.
+
 ### A local-first AI agent that runs on your machine, with local or cloud models.
 
 Drives your browser, edits files, runs approved commands, and remembers context across sessions. Open source, running on our TurboQuant `llama.cpp` for +30-50% throughput on small local models.

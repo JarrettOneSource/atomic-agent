@@ -293,6 +293,12 @@ export interface TuiAppCallbacks {
   onSkillCatalogRequested?(): void;
   /** Persist a new llama-server base URL after `/llama` (async health + disk write). */
   onPersistLlamaUrl?(url: string): void;
+  onModelGatewaysRefresh?(): void;
+  onModelGatewayUse?(hostId: string, modelId: string): void;
+  onModelGatewayWorker?(hostId: string, modelId: string): void;
+  onModelGatewayStop?(hostId: string, modelId: string): void;
+  onModelGatewaysStopAll?(): void;
+  onModelGatewaysToggleFusion?(): void;
   /** Persist the chosen TUI theme name into the user config (`/theme`). */
   onThemePersistRequested?(themeName: string): void;
   /**

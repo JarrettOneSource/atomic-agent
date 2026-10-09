@@ -18,3 +18,4 @@ CLAW-LOOT.md
 /logs/*
 /tmp/*
 .cursor/
+__pycache__/

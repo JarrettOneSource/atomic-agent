@@ -9,9 +9,7 @@ import {
   setConfigNoticeSink,
   type WhileBusySubmitMode,
 } from "../config/index.js";
-import { checkLlamaServer } from "../llm/llama-server-health.js";
-import { describeLlamaHealthFailure } from "../llm/describe-llama-health-failure.js";
-import { createAgentRuntime, type AgentRuntime } from "../runtime/bootstrap.js";
+import { createAgentRuntime } from "../runtime/bootstrap.js";
 import { getAppVersion } from "../version.js";
 import type { TuiAction } from "./tui-action.js";
 import type { LogRecord, LogSink } from "../tracing/structured-logger.js";
@@ -28,10 +26,7 @@ import {
   nonInteractiveStdinError,
   TUI_HELP,
 } from "./tui-args.js";
-import {
-  persistUserLocalLlmUrl,
-  pointsAtManagedDaemon,
-} from "./persist-user-local-models-config.js";
+import { persistLlamaUrl } from "./persist-llama-url.js";
 import {
   persistUserTuiMouse,
   persistUserTuiTheme,
@@ -518,7 +513,13 @@ export async function tuiCommand(args: string[]): Promise<number> {
         onMemoryDumpRequested: () => orchestrator.dumpProfile(),
         onSkillCatalogRequested: () => orchestrator.dumpSkillCatalog(),
         onPersistLlamaUrl: (nextUrl) =>
-          persistLlamaUrl(nextUrl, bus, orchestrator, runtime),
+          void persistLlamaUrl(nextUrl, bus, orchestrator, runtime),
+        onModelGatewaysRefresh: () => void orchestrator.modelGateways.refresh(),
+        onModelGatewayUse: (hostId, modelId) => void orchestrator.modelGateways.use(hostId, modelId),
+        onModelGatewayWorker: (hostId, modelId) => void orchestrator.modelGateways.useWorker(hostId, modelId),
+        onModelGatewayStop: (hostId, modelId) => void orchestrator.modelGateways.stop(hostId, modelId),
+        onModelGatewaysStopAll: () => void orchestrator.modelGateways.stopAll(),
+        onModelGatewaysToggleFusion: () => void orchestrator.modelGateways.toggleFusion(),
         onThemePersistRequested: (themeName) =>
           persistThemeChoice(themeName, bus),
         onTasksAutoRefreshStart: () => orchestrator.tasks.startAutoRefresh(),
@@ -826,6 +827,10 @@ export async function tuiCommand(args: string[]): Promise<number> {
 
   orchestrator.start();
 
+  if (config.localModels.gateways.length) {
+    bus.emit({ type: "llm_mode_set", mode: "gateways" });
+  }
+
   bus.emit({
     type: "runtime_info",
     line: `runtime ready — local-llm ${config.localModels.url}, browser ${config.browser.channel}`,
@@ -1066,83 +1071,4 @@ function persistWhileBusyMode(
     const msg = err instanceof Error ? err.message : String(err);
     bus.emit({ type: "runtime_info", line: `mode not saved: ${msg}` });
   }
-}
-
-function persistLlamaUrl(
-  nextUrl: string,
-  bus: ReturnType<typeof makeTuiEventBus>,
-  orchestrator: ChatOrchestrator,
-  runtime: AgentRuntime,
-): void {
-  // Every verdict goes to BOTH channels: `runtime_info` keeps the feed
-  // history, `providers_status` is the LLM panel's own status line — the
-  // only line the operator can actually see while saving from the
-  // External pane. Feed-only reporting is how a refused save looked like
-  // "nothing happened" (stub-verified: the 404/steer verdicts never
-  // rendered anywhere on the panel).
-  const report = (line: string): void => {
-    bus.emit({ type: "runtime_info", line });
-    bus.emit({ type: "providers_status", line, source: "external" });
-  };
-  void (async () => {
-    try {
-      // Immediate feedback: the probe can take up to 8s against a dead
-      // host, and a silent gap reads as a freeze (#65).
-      report(`probing ${nextUrl}…`);
-      const health = await checkLlamaServer({
-        url: nextUrl,
-        retries: 0,
-        backoffMs: 0,
-        timeoutMs: 8000,
-        // Catch a --api-key server here, where the operator can act,
-        // instead of on the first completion (llama.cpp exempts /health
-        // from the key, so the plain probe passes).
-        verifyAuth: true,
-      });
-      if (!health.reachable) {
-        report(describeLlamaHealthFailure(health, nextUrl));
-        // An openai-compat verdict has a real path forward — the same
-        // server saved as a cloud provider — so beyond naming it, open
-        // the steer prompt: `y` there deep-links into the provider
-        // wizard prefilled with this URL (Ollama URLs land on the
-        // Ollama preset) instead of leaving a dead-end refusal.
-        if (health.kind === "openai-compat") {
-          bus.emit({ type: "llm_external_compat_steer_opened", url: nextUrl });
-        }
-        return;
-      }
-      persistUserLocalLlmUrl(nextUrl);
-      // Rebuild the registered provider: its base URL was frozen at boot
-      // (health/vision requests would keep hitting the old address until
-      // a restart). The config write above already reset the cache.
-      await runtime.reloadLlmProvider("local-llama");
-      bus.emit({ type: "llama_url_changed", url: nextUrl });
-      orchestrator.updateLlamaUrl(nextUrl);
-      // The URL only takes effect if the chat route points at
-      // llama-server; a cloud provider would otherwise stay active and
-      // the saved URL would look inert. Done after the probe so a dead
-      // address never steals a working route, and skipped when the route
-      // is already local so editing a URL stays quiet. `refresh()`
-      // re-reads `localModels.mode` so the LLM tab stops claiming managed.
-      if (getConfig().llm?.activeTextProvider !== "local-llama") {
-        await orchestrator.providers.setActiveText("local-llama");
-      }
-      // An external server replaces the managed chat daemon, which would
-      // otherwise keep its VRAM for a route nothing uses. Unless the new
-      // URL *is* the managed daemon — stopping it would kill the server
-      // we just pointed at. Both branches refresh the LLM tab so it stops
-      // reporting managed mode.
-      if (
-        pointsAtManagedDaemon(nextUrl, getConfig().localModels.managed.port)
-      ) {
-        await orchestrator.localModels.refresh();
-      } else {
-        await orchestrator.localModels.stopChatDaemonOnly();
-      }
-      report(`local-llm URL saved (${health.latencyMs}ms)`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      report(`local-llm URL not saved: ${msg}`);
-    }
-  })();
 }

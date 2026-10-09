@@ -35,5 +35,6 @@ export function createLocalModelsDefaults(): UserLocalModelsConfig {
       hfEndpoint: DEFAULT_HF_ENDPOINT,
     },
     customModels: [],
+    gateways: [],
   };
 }

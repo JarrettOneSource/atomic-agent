@@ -4,6 +4,8 @@ import { activeTextProviderIsLlamaServer } from "../../llm/provider/registry/act
 import { resolveLlmConfig } from "../../llm/provider/registry/provider-registry.js";
 import { llamaEndpointUrl } from "../../llm/llama-endpoint-url.js";
 import { apiKeyForUrl } from "../../local-llm/server/managed-api-key.js";
+import { ModelGatewayClient } from "../../local-llm/gateways/model-gateway-client.js";
+import { findGatewayTarget } from "../../local-llm/gateways/gateway-target.js";
 import type { TuiAction } from "../tui-action.js";
 
 /**
@@ -129,6 +131,10 @@ export class LlmHealthPoller {
     // while the route is cloud, and the label this would fetch belongs
     // to a backend that is not serving the session.
     if (!this.localTextActive()) return;
+    if (findGatewayTarget(this.url, getConfig().localModels.gateways)) {
+      await this.tick();
+      return;
+    }
     await this.fetchModelLabel();
   }
 
@@ -165,6 +171,7 @@ export class LlmHealthPoller {
       });
     }
     try {
+      if (await this.pollGateway()) return;
       const result = await checkLlamaServer({
         url: this.url,
         retries: 0,
@@ -208,6 +215,35 @@ export class LlmHealthPoller {
     } finally {
       this.probing = false;
     }
+  }
+
+  private async pollGateway(): Promise<boolean> {
+    const currentUrl = this.url;
+    const target = findGatewayTarget(currentUrl, getConfig().localModels.gateways);
+    if (!target) return false;
+    const started = Date.now();
+    const models = await new ModelGatewayClient(target.gateway, {
+      requestTimeoutMs: LLM_HEALTH_PROBE_TIMEOUT_MS,
+    }).list();
+    if (this.stopped || this.url !== currentUrl) return true;
+    const model = models.find((row) => row.id === target.modelId);
+    this.hasSettledResult = true;
+    this.modelFetchedForUrl = true;
+    this.emitter.emit({
+      type: "llm_health_updated",
+      status: model?.state === "ready" ? "healthy" : "unreachable",
+      latencyMs: Date.now() - started,
+      error: model?.state === "ready" ? null : model
+        ? `Model ${model.state} — starts when you use it.`
+        : "Selected model is not in the gateway catalog.",
+      checkedAt: Date.now(),
+    });
+    this.emitter.emit({
+      type: "llm_model_updated",
+      model: model?.name ?? null,
+      contextWindow: model?.contextSize ?? null,
+    });
+    return true;
   }
 
   private async fetchModelLabel(): Promise<void> {

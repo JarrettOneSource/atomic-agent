@@ -67,10 +67,10 @@ function press(
 }
 
 describe("external llama.cpp pane", () => {
-  it("cycles Local → Cloud → External → Fallback → Local with →", () => {
+  it("cycles Local → Cloud → External → Fallback → Gateways → Local with →", () => {
     let state = createInitialTuiState(fakeSession());
     const seen: string[] = [];
-    for (let i = 0; i < 4; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       const [action] = press("]", emptyKey(), {
         ...state,
         uiMode: "debug",
@@ -79,17 +79,17 @@ describe("external llama.cpp pane", () => {
       state = reduceLlmPanelAction(state, action!) ?? state;
       seen.push(state.llmPanel.mode);
     }
-    expect(seen).toEqual(["cloud", "external", "fallback", "local"]);
+    expect(seen).toEqual(["cloud", "external", "fallback", "gateways", "local"]);
   });
 
-  it("steps backwards with ← (wraps to the last pane, Fallback)", () => {
+  it("steps backwards with ← (wraps to the last pane, Gateways)", () => {
     const state = createInitialTuiState(fakeSession());
     const [action] = press("", emptyKey({ leftArrow: true }), {
       ...state,
       uiMode: "debug",
       activeTab: "llm",
     });
-    expect(action).toEqual({ type: "llm_mode_set", mode: "fallback" });
+    expect(action).toEqual({ type: "llm_mode_set", mode: "gateways" });
   });
 
   it("shows the configured URL and reports inactive while managed mode is on", () => {

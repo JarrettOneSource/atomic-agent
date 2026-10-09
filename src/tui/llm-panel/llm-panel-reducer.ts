@@ -3,6 +3,7 @@ import type { TuiAction } from "../tui-action.js";
 import type { TuiState } from "../tui-state.js";
 import { isLlmPanelAction } from "./llm-panel-actions.js";
 import { selectCloudModelSection } from "./llm-panel-row-builders.js";
+import { modelGatewayRows, selectedGatewayRow } from "../model-gateways/model-gateway-rows.js";
 import {
   cursorFieldFor,
   LLM_PANEL_MODES,
@@ -16,6 +17,21 @@ export function reduceLlmPanelAction(
   if (!isLlmPanelAction(action)) return null;
   const panel = state.llmPanel;
   switch (action.type) {
+    case "llm_gateways_refreshed": {
+      const previous = selectedGatewayRow(state);
+      const next = { ...state, llmPanel: { ...panel, gatewayHosts: action.hosts } };
+      const rows = modelGatewayRows(next);
+      const index = rows.findIndex(({ host, model }) => previous
+        ? host.gateway.id === previous.host.gateway.id && model?.id === previous.model?.id
+        : model && state.session.llamaUrl === `${host.gateway.url}/upstream/${encodeURIComponent(model.id)}`);
+      return { ...next, llmPanel: { ...next.llmPanel,
+        gatewayCursor: index >= 0 ? index : Math.max(0, Math.min(panel.gatewayCursor, rows.length - 1)),
+      } };
+    }
+    case "llm_gateways_busy":
+      return { ...state, llmPanel: { ...panel, gatewayBusy: action.busy } };
+    case "llm_gateways_status":
+      return { ...state, llmPanel: { ...panel, gatewayStatus: action.message } };
     case "llm_mode_set":
       return {
         ...state,
@@ -177,6 +193,10 @@ export function nextMode(mode: LlmPanelMode, delta: number): LlmPanelMode {
 export function resolveModeFromActiveRoute(
   state: TuiState,
 ): LlmPanelMode | null {
+  if (state.llmPanel.gatewayHosts.some(({ gateway }) =>
+    state.session.llamaUrl.startsWith(`${gateway.url.replace(/\/+$/, "")}/upstream/`))) {
+    return "gateways";
+  }
   const activeTextProvider = state.providersPanel.rows.find(
     (row) => row.isActiveText,
   );

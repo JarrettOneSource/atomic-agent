@@ -48,6 +48,8 @@ import {
 import { captureAndWriteDebugBundle } from "./debug-bundle/index.js";
 import { LlmHealthPoller } from "./llm-health/llm-health-poller.js";
 import { LocalModelsOrchestrator } from "./local-models/local-models-orchestrator.js";
+import { ModelGatewaysOrchestrator } from "./model-gateways/model-gateways-orchestrator.js";
+import { persistLlamaUrl } from "./persist-llama-url.js";
 import { TasksOrchestrator } from "./tasks/tasks-orchestrator.js";
 import { SkillsOrchestrator } from "./skills/skills-orchestrator.js";
 import { MemoryOrchestrator } from "./memory/memory-orchestrator.js";
@@ -275,6 +277,7 @@ export class ChatOrchestrator {
   public readonly fallback: FallbackOrchestrator;
   public readonly runMode: RunModeOrchestrator;
   public readonly localModels: LocalModelsOrchestrator;
+  public readonly modelGateways: ModelGatewaysOrchestrator;
   public readonly llmHealth: LlmHealthPoller;
   public readonly telegram: TuiTelegramOrchestrator;
   public readonly privacy: PrivacyOrchestrator;
@@ -358,6 +361,17 @@ export class ChatOrchestrator {
       bus,
       providers: this.providers,
       localModels: this.localModels,
+    });
+    this.modelGateways = new ModelGatewaysOrchestrator(bus, {
+      activate: (url) => persistLlamaUrl(url, bus, this, runtime),
+      isBusy: () => this.currentController !== null || this.detachedTurns.size > 0 || runtime.gatewayTasks.activeCount > 0,
+      abortTasks: () => {
+        this.abortCurrentTurn();
+        this.detachedTurns.abortAll();
+      },
+      runtime,
+      runMode: this.runMode,
+      refreshProviders: () => this.providers.refresh(),
     });
     this.telegram = new TuiTelegramOrchestrator(runtime, bus);
     this.privacy = new PrivacyOrchestrator(runtime, bus);
@@ -461,6 +475,7 @@ export class ChatOrchestrator {
       }
     }
     this.llmHealth.start();
+    this.modelGateways.start();
     this.telegram.start();
     this.privacy.refresh();
     // Boot the tasks orchestrator on TUI mount so the always-on
@@ -1745,6 +1760,7 @@ export class ChatOrchestrator {
     this.swarm.dispose();
     this.stopWatchingRoute?.();
     await this.localModels.shutdown();
+    await this.modelGateways.shutdown();
     this.llmHealth.stop();
     this.telegram.shutdown();
     await this.runtime.shutdown();

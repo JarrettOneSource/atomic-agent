@@ -175,6 +175,20 @@ describe("RunModeOrchestrator.setMode", () => {
     expect(app.setActive).toHaveBeenCalledWith("local-llama");
   });
 
+  it("leaving reverse Fusion keeps the local main model instead of selecting its API worker", async () => {
+    seed({
+      ...BOTH_LEGS,
+      activeTextProvider: "local-llama",
+      runMode: { mode: "fusion", fusion: {
+        orchestratorProvider: "local-llama", workerProvider: "openrouter",
+      } },
+    });
+    const app = harness();
+    await app.orchestrator.setMode("local");
+    expect(getConfig().llm?.activeTextProvider).toBe("local-llama");
+    expect(app.orchestrator.current().effective).toBe("local");
+  });
+
   it("keeps the saved mode and reports when the hot-swap throws", async () => {
     seed(BOTH_LEGS);
     const app = harness();

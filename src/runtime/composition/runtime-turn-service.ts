@@ -24,6 +24,7 @@ import type { createRuntimeTraces } from "./runtime-traces.js";
 import type { createRuntimeObservability } from "./runtime-observability.js";
 import type { RuntimeProviders } from "./runtime-inference.js";
 import { captureModelModePolicy, resolveModelMode, type ModelModePolicy } from "../../llm/model-mode.js";
+import type { GatewayTaskLease } from "../../local-llm/gateways/gateway-task-manager.js";
 
 export function prepareRuntimeTurnState() {
   /**
@@ -70,6 +71,7 @@ export interface RuntimeTurnDependencies {
     llmComplete: (params: LlmStreamParams) => Promise<CompletionResult>;
   };
   inference: {
+    prepareGatewayModels?(providerIds: string[], signal?: AbortSignal): Promise<GatewayTaskLease>;
     providerRegistry: Pick<ProviderRegistry, "getProvider" | "activeText">;
     resolveActiveLlmSlice: RuntimeProviders["resolveActiveLlmSlice"];
     resolveCurrentRunMode: RuntimeProviders["resolveCurrentRunMode"];
@@ -314,179 +316,192 @@ export function createRuntimeTurnService(
     } = {},
   ): Promise<RunTurnResult> => {
     assertKnownProvider(runOptions.providerId);
-    // A fusion worker session is throwaway: no recorder, no trace pin, no
-    // memory, and — at the end — no save. The parent session's turn
-    // owns the durable record of what the worker did.
-    const worker = readFusionWorkerMeta(session.metadata);
-    const modelModePolicy = (worker ? turnModelModes.get(worker.parentSessionId) : undefined)
-      ?? captureModelModePolicy(resolveLlmConfig(getConfig()), resolveActiveModelName);
-    logger.debug("model mode selected for turn", {
-      sessionId: session.id,
-      ...resolveModelMode(modelModePolicy, runOptions.providerId),
-    });
-    if (worker) {
-      return turnContext.run({ sessionId: session.id }, async () => {
+    let gatewayLease: GatewayTaskLease | undefined;
+    if (getConfig().localModels.gateways.length && deps.inference.prepareGatewayModels) {
+      const selected = runOptions.providerId ?? resolveLlmConfig(getConfig()).activeTextProvider;
+      const mode = resolveCurrentRunMode();
+      const ids = [selected, ...(mode.effective === "fusion" && selected === mode.orchestratorProviderId
+        ? [mode.workerProviderId] : [])].filter((id): id is string => typeof id === "string");
+      gatewayLease = await deps.inference.prepareGatewayModels(ids, runOptions.signal);
+      runOptions = { ...runOptions, signal: gatewayLease.signal };
+    }
+    try {
+      // A fusion worker session is throwaway: no recorder, no trace pin, no
+      // memory, and — at the end — no save. The parent session's turn
+      // owns the durable record of what the worker did.
+      const worker = readFusionWorkerMeta(session.metadata);
+      const modelModePolicy = (worker ? turnModelModes.get(worker.parentSessionId) : undefined)
+        ?? captureModelModePolicy(resolveLlmConfig(getConfig()), resolveActiveModelName);
+      logger.debug("model mode selected for turn", {
+        sessionId: session.id,
+        ...resolveModelMode(modelModePolicy, runOptions.providerId),
+      });
+      if (worker) {
+        return await turnContext.run({ sessionId: session.id }, async () => {
+          try {
+            // The worker's request is its brief: the operator's words sit
+            // in its ORIGINAL REQUEST block, which is what the input guard
+            // reads (`quotedRequestText`).
+            turnRequests.set(session.id, userMessage);
+            return await loop.runTurn(session, {
+              userMessage,
+              modelModePolicy,
+              ephemeral: true,
+              ...buildLoopTurnBudget(runOptions),
+            });
+          } finally {
+            turnRequests.delete(session.id);
+            // The prompt_captured hook still records the worker's window
+            // occupancy under its id; nothing persists it, so drop it.
+            traces.clearContextUsage(session.id);
+            // A worker's turn is its whole life: nothing waits on its jobs.
+            shellJobs.endSession(session.id);
+            // A throwaway worker must not keep its server slot pinned.
+            slotManager.release(session.id);
+          }
+        });
+      }
+      // Resolved before the turn runs, from the live config: the model the
+      // operator chose for this turn is what the session should remember,
+      // not whatever the config says by the time the turn finishes — and
+      // deliberately not the fallback chain's emergency substitute either.
+      const llmResolved = resolveLlmConfig(getConfig());
+      const llmEntry = llmResolved.providers.find(
+        (p) => p.id === llmResolved.activeTextProvider,
+      );
+      const llmStamp: SessionLlmStamp = {
+        providerId: llmResolved.activeTextProvider,
+        chatModel: llmEntry?.defaultChatModel ?? llmEntry?.model ?? null,
+      };
+      // What this turn is served by, against what the session's previous
+      // turn was: a switch of provider, model, run mode or fusion worker —
+      // or a fallover still in force — is told to the model once, as
+      // `### route`, because the transcript it reads names the old model
+      // and repeats the old model's refusals (session-route.ts).
+      const turnRoute = resolveTurnRoute({
+        resolved: llmResolved,
+        runMode: resolveCurrentRunMode(),
+        managedModelId: getConfig().localModels.managed.modelId ?? null,
+        ...(runOptions.providerId !== undefined
+          ? { pinnedProviderId: runOptions.providerId }
+          : {}),
+        // Not a stand-in the chain will pass over for the primary: the
+        // turn starts on the primary then, and that is what it is told.
+        fallbackOverrideId: fallbackChain.standingOverrideFor(session.id),
+      });
+      const previousRoute = readSessionRoute(session.metadata);
+      const routeNote =
+        previousRoute === null
+          ? null
+          : renderRouteChangeNote(previousRoute, turnRoute, {
+              vision: resolveRouteVision(turnRoute.main.providerId),
+            });
+      if (routeNote !== null) {
+        logger.info("serving route changed since the previous turn", {
+          sessionId: session.id,
+          from: previousRoute,
+          to: turnRoute,
+        });
+      }
+      // The session's trace records the model this turn runs on, not the
+      // one in the stored metadata: that is the previous turn's until the
+      // turn's save below, so after a switch the log named the old model.
+      const recorder = ensureRecorder(session, {
+        ...session.metadata,
+        [SESSION_LLM_METADATA_KEY]: llmStamp,
+        [SESSION_ROUTE_METADATA_KEY]: turnRoute,
+      });
+      recorder?.noteTurnRoute(turnRoute);
+      // Pin this session for the duration of the turn. Without it a burst of
+      // new sessions can push this one's recorder out mid-turn, after which
+      // `emitAgentLoopEvent`'s `recorders.get(...)?.` silently drops every
+      // remaining event of the turn and any tool call whose `pendingCalls`
+      // entry went with it is logged with empty args.
+      traces.pinSession(session.id);
+      return await turnContext.run({ sessionId: session.id }, async () => {
+        // Registered before the mark and ended after the turn's end is
+        // written, so `shutdown` waiting on it waits for the row to be right.
+        const inFlight = turnsInFlight.begin(runOptions.signal);
+        markTurnRunning(session.id);
         try {
-          // The worker's request is its brief: the operator's words sit
-          // in its ORIGINAL REQUEST block, which is what the input guard
-          // reads (`quotedRequestText`).
-          turnRequests.set(session.id, userMessage);
-          return await loop.runTurn(session, {
+          turnModelModes.set(session.id, modelModePolicy);
+          // Recorded for `fusion.delegate`, which quotes it to the workers.
+          const turnRequest = pickOriginalRequest({
+            current: userMessage,
+            earlierTurns: session.turns,
+          });
+          if (turnRequest !== undefined) {
+            turnRequests.set(session.id, turnRequest);
+          }
+          // An explicit `maxSteps` from a caller (a durable task that pins
+          // its own budget, `run --max-steps`) is a *ceiling* that caller
+          // chose — honour it as one. Absent that, the config value is the
+          // leg length and `agent.task.*` supplies the ceiling, so an
+          // ordinary turn runs the task to completion instead of stopping
+          // at the first checkpoint.
+          const result = await loop.runTurn(session, {
             userMessage,
             modelModePolicy,
-            ephemeral: true,
+            // The same record the workers' briefs quote, pinned into the
+            // orchestrator's own prompt once the packer drops its carrier.
+            ...(turnRequest !== undefined
+              ? { originalRequest: turnRequest }
+              : {}),
+            ...(routeNote !== null ? { routeNote } : {}),
             ...buildLoopTurnBudget(runOptions),
           });
+          // Stamp the turn's window occupancy so the stored session can
+          // restore the TUI's context gauge when it is reopened. A turn
+          // that built no prompt (failed before step 1) leaves whatever
+          // snapshot the previous turn persisted. The same save also
+          // stamps what this turn ran on, so switching back into the
+          // session later restores its provider/model (session-llm.ts).
+          const usage = traces.readContextUsage(session.id);
+          const finished: SessionState = {
+            ...result.session,
+            ...(usage === undefined ? {} : { contextUsage: usage }),
+            metadata: {
+              ...result.session.metadata,
+              [SESSION_LLM_METADATA_KEY]: llmStamp,
+              [SESSION_ROUTE_METADATA_KEY]: turnRoute,
+            },
+          };
+          // The turn's end replaces its `running` mark (`beginTurn`).
+          sessionStore.finishTurn(finished);
+          // Name the thread once, from its first prompt, after the first
+          // turn that actually answered. Fire-and-forget on purpose: the
+          // turn is already saved and already returned, and an unnamed
+          // session simply keeps showing its prompt — which is what every
+          // session showed before. It must never delay or fail a reply.
+          if (getConfig().agent.nameSessions && shouldNameSession(finished)) {
+            void nameSession(finished);
+          }
+          // `finish` ended the whole session: its kept jobs go with it.
+          if (finished.status === "completed") shellJobs.endSession(session.id);
+          return { ...result, session: finished };
+        } catch (err) {
+          // The loop hands back a state for every ending it can classify —
+          // reply, finish, max steps, failed, cancelled — so this is a turn
+          // that threw, or whose save did. Its row must not go on saying
+          // `running`.
+          releaseThrownTurn(session, err, runOptions.signal);
+          throw err;
         } finally {
-          turnRequests.delete(session.id);
-          // The prompt_captured hook still records the worker's window
-          // occupancy under its id; nothing persists it, so drop it.
+          inFlight.end();
+          turnModelModes.delete(session.id);
+          // The turn is over, however it ended: the shell jobs it started
+          // and did not `keep` are stopped here — the one choke point
+          // every turn passes through (§"A turn is a task, not a step
+          // budget").
+          shellJobs.endTurn(session.id);
           traces.clearContextUsage(session.id);
-          // A worker's turn is its whole life: nothing waits on its jobs.
-          shellJobs.endSession(session.id);
-          // A throwaway worker must not keep its server slot pinned.
-          slotManager.release(session.id);
+          turnRequests.delete(session.id);
+          traces.releaseSession(session.id);
         }
       });
+    } finally {
+      gatewayLease?.release();
     }
-    // Resolved before the turn runs, from the live config: the model the
-    // operator chose for this turn is what the session should remember,
-    // not whatever the config says by the time the turn finishes — and
-    // deliberately not the fallback chain's emergency substitute either.
-    const llmResolved = resolveLlmConfig(getConfig());
-    const llmEntry = llmResolved.providers.find(
-      (p) => p.id === llmResolved.activeTextProvider,
-    );
-    const llmStamp: SessionLlmStamp = {
-      providerId: llmResolved.activeTextProvider,
-      chatModel: llmEntry?.defaultChatModel ?? llmEntry?.model ?? null,
-    };
-    // What this turn is served by, against what the session's previous
-    // turn was: a switch of provider, model, run mode or fusion worker —
-    // or a fallover still in force — is told to the model once, as
-    // `### route`, because the transcript it reads names the old model
-    // and repeats the old model's refusals (session-route.ts).
-    const turnRoute = resolveTurnRoute({
-      resolved: llmResolved,
-      runMode: resolveCurrentRunMode(),
-      managedModelId: getConfig().localModels.managed.modelId ?? null,
-      ...(runOptions.providerId !== undefined
-        ? { pinnedProviderId: runOptions.providerId }
-        : {}),
-      // Not a stand-in the chain will pass over for the primary: the
-      // turn starts on the primary then, and that is what it is told.
-      fallbackOverrideId: fallbackChain.standingOverrideFor(session.id),
-    });
-    const previousRoute = readSessionRoute(session.metadata);
-    const routeNote =
-      previousRoute === null
-        ? null
-        : renderRouteChangeNote(previousRoute, turnRoute, {
-            vision: resolveRouteVision(turnRoute.main.providerId),
-          });
-    if (routeNote !== null) {
-      logger.info("serving route changed since the previous turn", {
-        sessionId: session.id,
-        from: previousRoute,
-        to: turnRoute,
-      });
-    }
-    // The session's trace records the model this turn runs on, not the
-    // one in the stored metadata: that is the previous turn's until the
-    // turn's save below, so after a switch the log named the old model.
-    const recorder = ensureRecorder(session, {
-      ...session.metadata,
-      [SESSION_LLM_METADATA_KEY]: llmStamp,
-      [SESSION_ROUTE_METADATA_KEY]: turnRoute,
-    });
-    recorder?.noteTurnRoute(turnRoute);
-    // Pin this session for the duration of the turn. Without it a burst of
-    // new sessions can push this one's recorder out mid-turn, after which
-    // `emitAgentLoopEvent`'s `recorders.get(...)?.` silently drops every
-    // remaining event of the turn and any tool call whose `pendingCalls`
-    // entry went with it is logged with empty args.
-    traces.pinSession(session.id);
-    return turnContext.run({ sessionId: session.id }, async () => {
-      // Registered before the mark and ended after the turn's end is
-      // written, so `shutdown` waiting on it waits for the row to be right.
-      const inFlight = turnsInFlight.begin(runOptions.signal);
-      markTurnRunning(session.id);
-      try {
-        turnModelModes.set(session.id, modelModePolicy);
-        // Recorded for `fusion.delegate`, which quotes it to the workers.
-        const turnRequest = pickOriginalRequest({
-          current: userMessage,
-          earlierTurns: session.turns,
-        });
-        if (turnRequest !== undefined) {
-          turnRequests.set(session.id, turnRequest);
-        }
-        // An explicit `maxSteps` from a caller (a durable task that pins
-        // its own budget, `run --max-steps`) is a *ceiling* that caller
-        // chose — honour it as one. Absent that, the config value is the
-        // leg length and `agent.task.*` supplies the ceiling, so an
-        // ordinary turn runs the task to completion instead of stopping
-        // at the first checkpoint.
-        const result = await loop.runTurn(session, {
-          userMessage,
-          modelModePolicy,
-          // The same record the workers' briefs quote, pinned into the
-          // orchestrator's own prompt once the packer drops its carrier.
-          ...(turnRequest !== undefined
-            ? { originalRequest: turnRequest }
-            : {}),
-          ...(routeNote !== null ? { routeNote } : {}),
-          ...buildLoopTurnBudget(runOptions),
-        });
-        // Stamp the turn's window occupancy so the stored session can
-        // restore the TUI's context gauge when it is reopened. A turn
-        // that built no prompt (failed before step 1) leaves whatever
-        // snapshot the previous turn persisted. The same save also
-        // stamps what this turn ran on, so switching back into the
-        // session later restores its provider/model (session-llm.ts).
-        const usage = traces.readContextUsage(session.id);
-        const finished: SessionState = {
-          ...result.session,
-          ...(usage === undefined ? {} : { contextUsage: usage }),
-          metadata: {
-            ...result.session.metadata,
-            [SESSION_LLM_METADATA_KEY]: llmStamp,
-            [SESSION_ROUTE_METADATA_KEY]: turnRoute,
-          },
-        };
-        // The turn's end replaces its `running` mark (`beginTurn`).
-        sessionStore.finishTurn(finished);
-        // Name the thread once, from its first prompt, after the first
-        // turn that actually answered. Fire-and-forget on purpose: the
-        // turn is already saved and already returned, and an unnamed
-        // session simply keeps showing its prompt — which is what every
-        // session showed before. It must never delay or fail a reply.
-        if (getConfig().agent.nameSessions && shouldNameSession(finished)) {
-          void nameSession(finished);
-        }
-        // `finish` ended the whole session: its kept jobs go with it.
-        if (finished.status === "completed") shellJobs.endSession(session.id);
-        return { ...result, session: finished };
-      } catch (err) {
-        // The loop hands back a state for every ending it can classify —
-        // reply, finish, max steps, failed, cancelled — so this is a turn
-        // that threw, or whose save did. Its row must not go on saying
-        // `running`.
-        releaseThrownTurn(session, err, runOptions.signal);
-        throw err;
-      } finally {
-        inFlight.end();
-        turnModelModes.delete(session.id);
-        // The turn is over, however it ended: the shell jobs it started
-        // and did not `keep` are stopped here — the one choke point
-        // every turn passes through (§"A turn is a task, not a step
-        // budget").
-        shellJobs.endTurn(session.id);
-        traces.clearContextUsage(session.id);
-        turnRequests.delete(session.id);
-        traces.releaseSession(session.id);
-      }
-    });
   };
 
   /**

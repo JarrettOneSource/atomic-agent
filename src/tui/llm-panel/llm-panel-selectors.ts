@@ -134,6 +134,7 @@ export function selectLlmPanelRows(
   // The Fallback pane renders from `state.fallbackPanel`, not from the
   // shared `LlmPanelRow` list — it has no rows in this model.
   if (mode === "fallback") return [];
+  if (mode === "gateways") return [];
   return selectLocalRows(state);
 }
 

@@ -12,6 +12,8 @@ import { dirname } from "node:path";
 
 import { restrictWindowsAcl } from "../../config/windows-acl.js";
 import { resolveApiKeyFilePath } from "../backend-paths.js";
+import { findGatewayTarget } from "../gateways/gateway-target.js";
+import type { ModelGatewayDefinition } from "../gateways/model-gateway-types.js";
 
 /**
  * The bearer key a managed `llama-server` is launched with (issue #582).
@@ -226,6 +228,7 @@ export interface ApiKeyForUrlConfig {
     apiKey: string | null;
     managed?: { port: number };
     embeddings?: { port: number };
+    gateways?: readonly ModelGatewayDefinition[];
   };
   paths?: { localModelsDataDir: string };
 }
@@ -254,6 +257,8 @@ export function apiKeyForUrl(
 ): string | null {
   const envKey = env[OPERATOR_LLAMA_API_KEY_ENV];
   if (envKey) return envKey;
+  const gateway = findGatewayTarget(url, config.localModels.gateways ?? [])?.gateway;
+  if (gateway?.apiKeyEnv) return env[gateway.apiKeyEnv] || null;
   if (stripTrailingSlashes(url) === stripTrailingSlashes(config.localModels.url)) {
     return config.localModels.apiKey;
   }

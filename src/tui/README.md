@@ -18,6 +18,7 @@ This area owns terminal interface. Read [AGENTS.md](AGENTS.md) before changing i
 - [LLM health](llm-health/README.md)
 - [First-run onboarding](onboarding/README.md)
 - [Local model management](local-models/README.md)
+- [Remote model gateways](model-gateways/README.md)
 - [Memory browsing](memory/README.md)
 - [Scheduled tasks](tasks/README.md)
 - [Skills management](skills/README.md)
