@@ -1,0 +1,500 @@
+/**
+ * cloud-setup.drive.mjs — the cloud providers, driven like a person.
+ *
+ * Every action below is a REAL mouse click or a REAL keystroke over CDP.
+ * Nothing here calls a renderer function, and nothing here reads a
+ * `window.__*` hook to make a step happen: the only script that runs in
+ * the page reads text, classes and geometry back. A control that a hand
+ * cannot reach fails this file, which is the whole point — the previous
+ * suite drove `wizNext()` directly and so never noticed that the first-run
+ * cloud wizard's `Next` BUTTON was wired to nothing.
+ *
+ * It talks to the real OpenRouter and AI/ML API, with the keys in the seed
+ * directory's `.env`, and it is not finished until each provider has
+ * answered a real message.
+ *
+ *   ATAG_DRIVE_STATE_SEED=/path/with/.env \
+ *   ATAG_DRIVE_PORT=9402 \
+ *   node test/cloud-setup.drive.mjs
+ *
+ * The seed directory is only read: the run gets its own fresh state
+ * directory under the OS temp dir with a copy of the `.env` in it, so a
+ * first run is genuinely a first run and no existing installation is
+ * touched.
+ */
+import { mkdtempSync, copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { launch, sleep, check, step, report } from './drive-cloud-lib.mjs';
+
+const SEED = process.env.ATAG_DRIVE_STATE_SEED;
+const PORT = Number(process.env.ATAG_DRIVE_PORT || 9402);
+const KEEP = process.env.ATAG_DRIVE_KEEP === '1';
+if (!SEED || !existsSync(join(SEED, '.env'))) {
+  console.error('ATAG_DRIVE_STATE_SEED must name a directory containing a .env with OPENROUTER_API_KEY and AIMLAPI_API_KEY');
+  process.exit(2);
+}
+
+/**
+ * The model step 14 switches TO, to prove that a cloud model chosen
+ * after setup really answers. It has to be one the operator's key can
+ * pay for at the agent's `completionMaxTokens` (8192), which is a real
+ * constraint and not a detail: see step 16.
+ */
+const SWITCH_MODEL = 'google/gemini-3.5-flash-lite';
+/**
+ * The model step 16 switches to on purpose because this key CANNOT
+ * afford it — OpenRouter answers 402 and names the remedy. Step 16 is
+ * about what the operator is then told.
+ */
+const REFUSING_MODEL = 'anthropic/claude-haiku-4.5';
+
+const stateDir = mkdtempSync(join(tmpdir(), 'atag-drive-'));
+copyFileSync(join(SEED, '.env'), join(stateDir, '.env'));
+console.log(`fresh state dir: ${stateDir}`);
+
+/* The keys are TYPED into the wizard, not left to the ambient variable:
+   the operator's complaint is about the configuring, and a run that only
+   ever presses Next on an empty field never exercises it. They are read
+   here and typed there; they are never logged, and no check ever prints a
+   field's value — only its length. */
+const ENV = Object.fromEntries(readFileSync(join(SEED, '.env'), 'utf8').split('\n')
+  .map((l) => l.replace(/^\s*export\s+/, '').trim())
+  .filter((l) => l && !l.startsWith('#') && l.includes('='))
+  .map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim().replace(/^['"]|['"]$/g, '')]));
+for (const name of ['OPENROUTER_API_KEY', 'AIMLAPI_API_KEY']) {
+  if (!ENV[name]) { console.error(`the seed .env has no ${name}`); process.exit(2); }
+}
+
+const app = await launch({ stateDir, port: PORT });
+let failed = 0;
+
+/** The composer's chips, left to right — the id each stands for (`data-id`;
+    Calm S2 prints human words on the pills). */
+const chips = () => app.js(`[...document.querySelectorAll('.cfoot .cchip')].map((n) => n.dataset.id || '')`);
+/** The transcript, flattened. Rows are `#scroller .col720 > .turn`; a
+    user's own message is the one that carries `.usr`. */
+const TURNS = `[...document.querySelectorAll('#scroller .col720 > .turn')]`;
+/* Only what the MODELS said. Reading the whole column would let every
+   "reply with exactly the word X" question satisfy a check about X — the
+   answer would never have to arrive for the assertion to pass. */
+const transcript = () => app.js(`${TURNS}.filter((n) => !n.classList.contains('usr'))
+  .map((n) => n.querySelector(':scope > div > .prose'))
+  .filter(Boolean)
+  .map((n) => (n.textContent||'').replace(/\\s+/g,' ').trim()).join(' | ')`);
+/** The onboarding screen's visible controls. */
+const wizard = () => app.js(`(() => {
+  const ob = document.querySelector('#onboarding');
+  if (!ob) return null;
+  const t = (n) => (n && n.textContent || '').replace(/\\s+/g,' ').trim();
+  return { head: t(ob.querySelector('.ob-h')),
+           rows: [...ob.querySelectorAll('.ob-row, .modelrow')].map((n) => t(n).slice(0, 52)),
+           buttons: [...ob.querySelectorAll('button')].map((n) => t(n).slice(0, 30)),
+           hints: [...ob.querySelectorAll('.ob-hints .hint, .ob-hints .hint-live')].map((n) => t(n)),
+           key: !!ob.querySelector('#wiz-key'),
+           error: t(ob.querySelector('.ob-err')) };
+})()`);
+
+/**
+ * Activate a list row the way the flow asks a hand to. Calm (S6): a click
+ * selects the row (it wears a tick) and the step's primary button —
+ * Continue, "Download 3.4 GB", "Use …" — sends the same Enter the keyboard
+ * sends. Two separate single clicks a second apart are NOT a double click
+ * (Chrome would not coalesce them), so the second input is the button.
+ */
+const ROW_TAGS = '[data-obrow],[data-obwiz],.modelrow';
+async function pickRow(text, opts = {}) {
+  const o = { tags: ROW_TAGS, settleMs: 900, ...opts };
+  await app.clickText(text, { ...o, settleMs: 600 });
+  // The first visible primary button of the step: the wizard's action bar
+  // (`.ob-foot .btn-p`), inside the first-run layer or the composer popover.
+  return app.clickSel('.ob-foot .btn-p', { settleMs: o.settleMs });
+}
+
+/**
+ * Walk whatever the flow puts up after a backend is configured — the
+ * wait-or-jump screen, the second-backend offer, the import screen — by
+ * clicking the row that means "take me to the agent", until the setup is
+ * gone. Only rows that are actually on screen are clicked.
+ */
+async function finishOnboarding({ timeoutMs = 90000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const exits = ['Start using the agent now', 'Skip — take me to the agent'];
+  while (Date.now() < deadline) {
+    if (!(await app.js(`!!document.querySelector('#onboarding')`))) return;
+    let moved = false;
+    /* ATO-161: the model step that follows a verified key. Take the default
+       with its own button; the click is taken the moment the step goes. */
+    if (await app.js(`!!document.querySelector('#onboarding [data-act="wiz:useDefault"]')`)) {
+      await app.clickSel('#onboarding [data-act="wiz:useDefault"]', { settleMs: 2000 });
+      continue;
+    }
+    // The import step's skip is an action-bar button, not a row (B.5).
+    if (await app.js(`!!document.querySelector('#onboarding [data-obact="import:skip"]')`)) {
+      await app.clickSel('#onboarding [data-obact="import:skip"]', { settleMs: 2000 });
+      continue;
+    }
+    for (const label of exits) {
+      if (await app.js(`[...document.querySelectorAll('#onboarding [data-obrow]')].some((n) => (n.textContent||'').includes(${JSON.stringify(label)}))`)) {
+        await pickRow(label, { settleMs: 2000 });
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) await sleep(1500);
+  }
+  throw new Error('finishOnboarding: the setup never closed');
+}
+
+/**
+ * Type into the composer and wait for the assistant's answer to land.
+ *
+ * The user's own row is `.turn.usr`, and its text carries the message
+ * plus the copy/resend affordances that sit beside it, so it is matched
+ * by CONTAINS. The answer is the assistant PROSE that follows it.
+ */
+const AFTER_USER = (text) => `(() => {
+  const turns = ${TURNS};
+  let at = -1;
+  for (let i = 0; i < turns.length; i += 1) {
+    if (!turns[i].classList.contains('usr')) continue;
+    if ((turns[i].textContent || '').replace(/\\s+/g,' ').includes(${JSON.stringify(text)})) at = i;
+  }
+  if (at < 0) return null;
+  /* The ANSWER is an assistant prose block. A turn can open with a
+     "Reasoning · N steps" card, and taking the first row after the
+     question as the reply reads that card as the model's answer and
+     declares a working model broken. */
+  const said = turns.slice(at + 1)
+    .map((n) => n.querySelector(':scope > div > .prose'))
+    .filter((n) => n && (n.textContent || '').trim().length > 0)
+    .map((n) => n.textContent.replace(/\\s+/g,' ').trim());
+  return said.length ? said.join(' ') : null;
+})()`;
+
+/* The composer refuses to send while a provider switch is still landing —
+   it keeps the draft and says so, and the send button wears a spinner
+   until the new configuration is live. A person waits for that and presses
+   Enter again, so this does too, rather than pressing once and calling a
+   working app broken. */
+const SEND_UNLOCKED = `!document.querySelector('.sendbtn.locked')`;
+
+/* Whatever the app said OUTSIDE the prose — "turn failed [transport]: …"
+   is a `.sysrow`, not a turn, so a reply check that reads only the prose
+   reports "(no reply)" and hides the reason the app was showing all
+   along. */
+const systemRows = () => app.js(`[...document.querySelectorAll('#scroller .col720 .sysrow')]
+  .map((n) => (n.textContent||'').replace(/\\s+/g,' ').trim()).filter(Boolean).slice(-4).join(' | ')`);
+
+/**
+ * Pick a cloud model in Settings › LLM › Cloud by clicking its row, and
+ * wait for the composer's model chip to follow. The pane's rows arrive
+ * from the provider list, which is fetched, so the row is waited for
+ * rather than assumed.
+ */
+async function pickCloudModel(modelId) {
+  await app.waitFor(
+    `[...document.querySelectorAll('[data-llm-row]')].some((n) => (n.dataset.llmRow || '').includes(${JSON.stringify(modelId)}))`,
+    { timeoutMs: 60000, label: `the row for ${modelId} arrives` });
+  // Calm (S5): the row says "Use" (its tooltip keeps the TUI's "Enter: use openrouter/…"), so it is clicked by its hook.
+  await app.clickSel(`[data-llm-row="cloud-text:openrouter:${modelId}"]`, { settleMs: 2500 });
+  await app.waitFor(
+    `[...document.querySelectorAll('.cfoot .cchip')].some((n) => n.dataset.id === ${JSON.stringify(modelId)})`,
+    { timeoutMs: 90000, label: `the model chip follows the pick of ${modelId}` });
+}
+
+/**
+ * `expectReply: false` means the turn is ALLOWED to fail — step 16 drives
+ * a model the key cannot pay for, and the interesting evidence is what
+ * the app says, not whether an answer arrives. The message is still
+ * really sent and the turn really run; only the wait gives up quietly,
+ * returning null so the caller can read the system rows instead.
+ */
+async function askAndWait(text, { timeoutMs = 180000, expectReply = true } = {}) {
+  await app.waitFor(SEND_UNLOCKED, { timeoutMs: 120000, label: 'the composer unlocks after a switch' });
+  const sysBefore = await app.js(`document.querySelectorAll('#scroller .col720 .sysrow').length`);
+  await app.type('#entry', text, { settleMs: 400 });
+  for (let tries = 0; tries < 4; tries += 1) {
+    await app.press('Enter', { settleMs: 1500 });
+    if (!(await app.js(`((document.querySelector('#entry')||{}).value || '').trim().length`))) break;
+    await app.waitFor(SEND_UNLOCKED, { timeoutMs: 120000, label: 'the composer unlocks after a switch' });
+  }
+  if (await app.js(`((document.querySelector('#entry')||{}).value || '').trim().length`)) {
+    const why = await app.js(`JSON.stringify({
+      swx: window.__swxState ? window.__swxState().pending : 'n/a',
+      label: window.__swxState ? window.__swxState().label : 'n/a',
+      bsw: window.__bsw ? window.__bsw() : null,
+      sel: window.__sel ? window.__sel() : null,
+      locked: !!document.querySelector('.sendbtn.locked'),
+      active: (document.activeElement||{}).id || (document.activeElement||{}).tagName,
+      toasts: window.__toasts ? window.__toasts() : null })`);
+    throw new Error(`the composer would not send ${JSON.stringify(text)} — the draft is still in the box: ${why}`);
+  }
+  if (!expectReply) {
+    // A failed turn clears the busy state and prints a system row; give
+    // it a bounded wait for either outcome rather than the full one.
+    // Read the screen, not a hook: a turn that fails prints a system row
+    // of its own, so waiting for either the answer or a NEW system row
+    // catches both endings without asking the app how it feels.
+    await app.waitFor(
+      `!!(${AFTER_USER(text)}) || document.querySelectorAll('#scroller .col720 .sysrow').length > ${sysBefore}`,
+      { timeoutMs: 120000, label: 'the turn finishes, either way' }).catch(() => false);
+    await sleep(1200);
+    return app.js(AFTER_USER(text));
+  }
+  await app.waitFor(AFTER_USER(text), { timeoutMs, label: `reply to ${JSON.stringify(text)}` });
+  return app.js(AFTER_USER(text));
+}
+
+try {
+  /* ============================================================
+     1. First run, the operator's own path: Local models FIRST, then a
+        cloud provider from inside the setup.
+     ============================================================ */
+  step(1, 'first run opens on the intro');
+  await app.waitFor(`!!document.querySelector('#onboarding')`, { timeoutMs: 40000 });
+  /* Backlog 03: the intro leaves by itself once the setup data is read, so
+     the wizard may already be past it when this looks — either is it having
+     opened by itself. */
+  check('the wizard opened by itself on a fresh state dir',
+    await app.js(`!!(window.__ob && window.__ob().open && ['intro', 'choose'].includes(window.__ob().step))`));
+
+  step(2, 'press on the intro to get to the backend choice');
+  /* The intro takes two presses while the tagline is still typing — the
+     first one finishes the type-on, the second moves on — so click the way
+     a person does: again, until the screen changes. */
+  for (let i = 0; i < 4 && await app.js(`/ob-intro-layer/.test((document.querySelector('#onboarding')||{}).className||'')`); i++) {
+    await app.clickAt(500, 300, { settleMs: 1200 });
+  }
+  let w = await wizard();
+  check('the three backends are offered', w.rows.length === 3, JSON.stringify(w.rows));
+
+  step(3, 'choose "Local models" — the choice the complaint starts from');
+  await pickRow('Local models', { settleMs: 2500 });
+  w = await wizard();
+  // Calm (S6): the "Recommended models" caption is gone; the step itself is the proof.
+  check('the local model list is up', await app.js(`window.__ob && window.__ob().step === 'local_pick'`), JSON.stringify(w.head));
+
+  step(4, 'the local list must have a MOUSE way back');
+  // r2: no keycap hint strip any more — the action bar's Back is the way.
+  check('the action bar carries a Back button', w.buttons.some((b) => /^Back$/.test(b)), JSON.stringify(w.buttons));
+  await app.clickText('Back', { within: '.ob-foot', tags: 'button', settleMs: 1500 });
+  w = await wizard();
+  check('clicking it lands back on the backend choice', w.rows.length === 3 && w.rows.some((r) => /Cloud models/.test(r)),
+    JSON.stringify(w.rows));
+
+  step(5, 'back into Local models and start a download, then cancel it at once');
+  await pickRow('Local models', { settleMs: 2000 });
+  /* The recommended picks arrive from `atag models list`, which on a cold
+     state directory can take the better part of a minute — the list is
+     just the Hugging Face row until it lands. Wait for a pick the way a
+     person waits for a list to fill, rather than clicking into a gap. */
+  // Calm (S6): rows show human names; the id is the row's data-model.
+  await app.waitFor(`!!document.querySelector('#onboarding .ob-row[data-model="qwen-3.5-4b"]')`,
+    { timeoutMs: 120000, label: 'the recommended local models arrive' });
+  await app.clickSel('#onboarding .ob-row[data-model="qwen-3.5-4b"]', { settleMs: 600 });
+  // The action bar's "Download 3.4 GB".
+  await app.clickSel('#onboarding .ob-foot .btn-p', { settleMs: 3500 });
+  w = await wizard();
+  check('the download screen is up with the cloud offer on it',
+    await app.js(`[...document.querySelectorAll('#onboarding .ob-offer')].some((n) => /Set up a cloud model (meanwhile|instead)/.test(n.textContent || ''))`),
+    JSON.stringify(w.buttons));
+  // Cancel the pull straight away — this file has no business fetching
+  // gigabytes, and the cloud offer stays on screen either way.
+  await app.clickText('Cancel', { tags: 'button', settleMs: 1200, optional: true });
+
+  step(6, 'take the wizard up on "set up a cloud model in the meantime"');
+  await app.clickText('Set up a cloud', { settleMs: 1800 });
+  w = await wizard();
+  // Calm (S6): the provider step is titled "Choose a provider".
+  check('the provider list opened inside the setup', await app.js(`window.__ob && window.__ob().step === 'cloud'`) && !w.key, JSON.stringify(w.head));
+  check('OpenRouter and AI/ML API are both on it',
+    w.rows.some((r) => /OpenRouter/.test(r)) && w.rows.some((r) => /AI\/ML API/.test(r)));
+
+  step(7, 'pick OpenRouter and TYPE a key that is WRONG, the way a hand slips');
+  await pickRow('OpenRouter', { settleMs: 1500 });
+  w = await wizard();
+  check('the API key screen is up', /API key/.test(w.head || '') && w.key, JSON.stringify(w.head));
+  await app.type('#wiz-key', 'sk-or-v1-' + '0'.repeat(64), { settleMs: 400 });
+  await app.clickText('Next', { settleMs: 2000 });
+  /* "asking the provider" is no longer drawn; while the check runs the
+     button reads "Verifying…". Wait for a verdict: a reason under the box,
+     or (wrongly) the model step. */
+  await app.waitFor(`!/Verifying/.test((document.querySelector('#onboarding')||{}).textContent || '')`
+    + ` && (!!document.querySelector('#onboarding .ob-err') || !!document.querySelector('#onboarding [data-wizmodel]'))`,
+    { timeoutMs: 90000, label: 'the bogus key is checked' });
+  w = await wizard();
+  /* The wizard used to say it was "checking the key against the
+     provider's model list". For OpenRouter and AI/ML API that list is a
+     catalogue BUNDLED IN THE BINARY, so it answered for any string at
+     all: the screen said "Cloud model ready", the setup closed, and the
+     first message was where the operator found out. A verification step
+     that cannot fail is worse than none. */
+  check('a wrong key is REFUSED, on the key screen, with a reason',
+    !!w && w.key && !!w.error, JSON.stringify({ head: w && w.head, error: w && w.error }));
+
+  step(8, 'correct the key and CLICK Next — the control the complaint is about');
+  await app.clear('#wiz-key');
+  await app.type('#wiz-key', ENV.OPENROUTER_API_KEY, { settleMs: 400 });
+  check('the typing landed in the key field',
+    await app.js(`(document.querySelector('#wiz-key')||{}).value.length`) === ENV.OPENROUTER_API_KEY.length);
+  await app.clickText('Next', { settleMs: 2000 });
+  const verifying = await app.js(`/Verifying|asking the provider/.test((document.querySelector('#onboarding')||{}).textContent || '')`);
+  check('the click actually starts the verification (it used to do nothing at all)', !!verifying);
+  /* ATO-161: a verified key lands on the model step (the `[data-wizmodel]`
+     rows); a refused one stays on the key screen with a reason. */
+  await app.waitFor(`!!document.querySelector('#onboarding [data-wizmodel]')`
+    + ` || (!/Verifying/.test((document.querySelector('#onboarding')||{}).textContent || '') && !!document.querySelector('#onboarding .ob-err'))`,
+    { timeoutMs: 120000, label: 'key verification' });
+  w = await wizard();
+  check('the real key is accepted and the key screen is left behind',
+    !w || !w.key, JSON.stringify({ head: w && w.head, error: w && w.error }));
+
+  step(9, 'finish the setup');
+  await finishOnboarding();
+  await app.clickText('Cancel', { tags: 'button', settleMs: 1000, optional: true });
+  let c = await chips();
+  check('the composer says a cloud route is active', c[0] === 'cloud' && c[1] === 'openrouter', JSON.stringify(c));
+
+  /* ============================================================
+     2. OpenRouter, end to end.
+     ============================================================ */
+  step(10, 'send a real message on OpenRouter');
+  const reply1 = await askAndWait('Reply with exactly the word pineapple and nothing else.');
+  check('OpenRouter answered', /pineapple/i.test(reply1),
+    `${JSON.stringify(reply1).slice(0, 200)} · system rows: ${await systemRows()}`);
+
+  /* ============================================================
+     3. AI/ML API, added AFTER setup from the composer's own chip.
+     ============================================================ */
+  step(11, 'add AI/ML API from the composer provider chip');
+  await app.clickText('OpenRouter', { tags: '.cfoot .cchip', settleMs: 1200 });
+  await app.clickText('Add a new provider', { settleMs: 1500 });
+  await pickRow('AI/ML API', { settleMs: 1500 });   // Calm (S6): select, then Continue
+  check('the AI/ML API key screen is up',
+    await app.js(`!!document.querySelector('#wiz-key') && /AI\\/ML API/.test(document.body.textContent)`));
+  await app.type('#wiz-key', ENV.AIMLAPI_API_KEY, { settleMs: 400 });
+  await app.clickText('Next', { settleMs: 2000 });
+  /* ATO-161: the model step comes up in the popover before anything is
+     activated; take the default there. */
+  await app.waitFor(`!!document.querySelector('.popover [data-act="wiz:useDefault"]') || !!document.querySelector('.popover .ob-err')`,
+    { timeoutMs: 90000, label: 'the AI/ML API key answered' });
+  if (await app.js(`!!document.querySelector('.popover [data-act="wiz:useDefault"]')`)) {
+    await app.clickSel('.popover [data-act="wiz:useDefault"]', { settleMs: 1500 });
+  }
+  await app.waitFor(`[...document.querySelectorAll('.cfoot .cchip')].some((n) => n.dataset.id === 'aimlapi')`,
+    { timeoutMs: 90000, label: 'aimlapi becomes the active provider' });
+  c = await chips();
+  check('the chips switched to aimlapi with a model of its own', c[1] === 'aimlapi' && !!c[2], JSON.stringify(c));
+
+  step(12, 'send a real message on AI/ML API');
+  const reply2 = await askAndWait('Reply with exactly the word banana and nothing else.');
+  check('AI/ML API answered', /banana/i.test(reply2),
+    `${JSON.stringify(reply2).slice(0, 200)} · system rows: ${await systemRows()}`);
+
+  /* ============================================================
+     4. Switching after setup: provider A → provider B, then model → model.
+     ============================================================ */
+  step(13, 'switch back to OpenRouter from Settings › LLM › Cloud');
+  await app.press('Escape', { settleMs: 800 });
+  // One click opens the settings window; a second would close it again.
+  if (!(await app.js(`!!document.querySelector('#settings')`))) {
+    await app.clickText('Settings', { tags: 'button', settleMs: 1500 });
+  }
+  await app.waitFor(`!!document.querySelector('#settings .setmenu')`, { timeoutMs: 20000, label: 'the settings window opens' });
+  await app.clickText('Models', { within: '#settings .setmenu', tags: 'button', settleMs: 2500 });
+  await app.waitFor(`!!document.querySelector('[data-act="llm:mode:cloud"]')`, { timeoutMs: 20000, label: 'the LLM pane opens' });
+  await app.clickSel('[data-act="llm:mode:cloud"]', { settleMs: 2500 });
+  /* A provider row as the Cloud pane draws it: the id, its key chip, and
+     what Enter does on it. Read per row, so a chip on the wrong row fails. */
+  const providerRow = (id) => `(() => { const r = document.querySelector('#settings [data-llm-row="cloud-provider:${id}"]'); if (!r) return null;`
+    + ` const chip = r.querySelector('.t .tk-chip');`
+    + ` return {id: (r.dataset.llmRow || '').slice('cloud-provider:'.length), auth: chip ? chip.textContent.trim() : '', effect: ((r.querySelector('.llm-effect') || {}).textContent || '').trim()}; })()`;
+  // Calm (S5): the key chip and the action pill speak words ("Key saved", "Use" / "In use").
+  const keyOk = (id) => `((row) => !!row && row.id === '${id}' && row.auth === 'Key saved')(${providerRow(id)})`;
+  check('both providers are listed with a resolved key',
+    await app.js(`${keyOk('openrouter')} && ${keyOk('aimlapi')}`));
+  await app.clickSel('[data-llm-row="cloud-provider:openrouter"]', { settleMs: 2000 });
+  await app.waitFor(`[...document.querySelectorAll('.cfoot .cchip')].some((n) => n.dataset.id === 'openrouter')`,
+    { timeoutMs: 90000, label: 'the route moves to openrouter' });
+  /* The pane repaints from the live config a beat after the route moves,
+     so this waits for the row to say it rather than sampling once. */
+  const settingsAgrees = await app.waitFor(
+    `((row) => !!row && row.id === 'openrouter' && row.auth === 'Key saved' && row.effect === 'In use')(${providerRow('openrouter')})`,
+    { timeoutMs: 30000, label: 'Settings names openrouter as current' }).catch(() => false);
+  check('Settings agrees the current provider is openrouter', settingsAgrees,
+    JSON.stringify(await app.js(providerRow('openrouter'))));
+
+  step(14, 'switch to a different OpenRouter model by clicking its row');
+  await pickCloudModel(SWITCH_MODEL);
+  c = await chips();
+  check('the composer chips and Settings agree on the new model',
+    c[1] === 'openrouter' && c[2] === SWITCH_MODEL, JSON.stringify(c));
+
+  step(15, 'the newly picked model answers for real');
+  await app.press('Escape', { settleMs: 1500 });
+  const reply3 = await askAndWait('Reply with exactly the word mango and nothing else.');
+  check('the model chosen after setup answered', /mango/i.test(reply3),
+    `${JSON.stringify(reply3).slice(0, 200)} · system rows: ${await systemRows()}`);
+
+  const tail = await transcript();
+  check('the three answers are in the transcript, in the models\' own words',
+    /pineapple/i.test(tail) && /banana/i.test(tail) && /mango/i.test(tail), tail.slice(0, 200));
+
+  /* ============================================================
+     5. What the operator is told when a cloud provider REFUSES.
+
+     This step is where the round's headline complaint actually lived.
+     Choosing a model the key cannot afford used to end in
+
+         turn failed [transport]: fetch failed
+
+     which names no provider, no reason and no remedy — and is not even
+     about the provider that refused. `resolveFallbackChain` appends the
+     configured llama-server to the tail of every chain, so after
+     OpenRouter answered `402 … requires more credits, or fewer
+     max_tokens` the agent fell over to a local daemon that had never
+     been started, and `runWithFallback` rethrew the LAST error. The
+     operator was shown a socket failure from a backend they never
+     picked, while the provider's own instructions were dropped.
+
+     `anthropic/claude-haiku-4.5` is the model that exposed it: on this
+     key the balance covers fewer tokens than the agent's 8192-token
+     request, so OpenRouter refuses it while cheaper models answer. Both
+     endings are legitimate — a topped-up key simply replies — so this
+     accepts either. What it does NOT accept is the old answer: a bare
+     transport error that names neither the provider nor a reason.
+     ============================================================ */
+  step(16, 'a provider refusal is reported in the provider\'s own words');
+  if (!(await app.js(`!!document.querySelector('#settings')`))) {
+    await app.clickText('Settings', { tags: 'button', settleMs: 1500 });
+    await app.clickText('Models', { within: '#settings .setmenu', tags: 'button', settleMs: 2500 });
+    await app.clickSel('[data-act="llm:mode:cloud"]', { settleMs: 2500 });
+  }
+  await pickCloudModel(REFUSING_MODEL);
+  await app.press('Escape', { settleMs: 1500 });
+  const answered = await askAndWait('Reply with exactly the word lychee and nothing else.', { expectReply: false });
+  const said = await systemRows();
+  const refused = /rejected the request|rate-limiting|rejected the API key|server trouble|Can't reach/.test(said);
+  check('the turn either answers or is refused in words the operator can act on',
+    /lychee/i.test(answered || '') || refused,
+    `reply=${JSON.stringify(answered).slice(0, 120)} · system rows: ${said}`);
+  check('a cloud refusal never surfaces as the dead local backend\'s socket error',
+    !/turn failed \[transport\]: fetch failed/.test(said), said);
+  if (refused) {
+    // Backlog 40: a billing refusal's line names the provider by its name.
+    check('the refusal names the provider that refused',
+      /"openrouter"|\bOpenRouter\b/.test(said), said);
+  }
+} catch (err) {
+  console.log(`\nDRIVER ERROR: ${err.message}`);
+  try { await app.screenshot(join(tmpdir(), 'atag-cloud-drive-failure.png')); } catch { /* best effort */ }
+  failed = 1;
+} finally {
+  failed += report('cloud-setup.drive');
+  const errs = app.consoleLines.filter((l) => /^\[error\]|^\[exception\]/.test(l));
+  if (errs.length) console.log(`renderer errors:\n  ${errs.slice(0, 10).join('\n  ')}`);
+  await app.quit();
+  if (!KEEP) { try { rmSync(stateDir, { recursive: true, force: true }); } catch { /* leave it */ } }
+}
+process.exit(failed ? 1 : 0);

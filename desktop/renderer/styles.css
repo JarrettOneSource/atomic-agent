@@ -1,0 +1,621 @@
+/* ============================================================
+   TOKENS — Atomic Agent · Soft Tactile
+   Soft Tactile (chosen 2026-09-14) replaces the Paper/Ink manual look:
+   floating rounded panels on a soft ground, soft shadows, pill controls,
+   Figtree for what a person reads and DM Mono for what a machine wrote — in
+   Atomic Agent's own colours. No new hue: every value already ships in
+   atomicagent.io, the terminal app or desktop 0.5.5.
+
+   Both palettes are declared here as `--p-*` (Paper) and `--i-*` (Ink), and
+   the live tokens alias one set or the other. The two dark blocks only
+   re-point aliases, so every colour literal in this file lives in the
+   palette part of `:root`. Tokens that are the same in both themes (brand,
+   indigo, glass, scrim) are declared once and never re-pointed.
+
+   A custom property that references another one is resolved on the element
+   that declares it. Everything here is declared on :root and the dark
+   blocks also target :root, so `--bd`, `--blue`, the washes and the legacy
+   bridge follow the theme with no dark counterpart. Re-defining a base token
+   (--ink, --paper…) on a subtree would NOT re-resolve them there.
+
+   The stylesheet is split by region: this file holds the tokens and the
+   shared component kit; css/*.css hold one region each (shell, overlays,
+   popovers, chat, composer, onboarding, settings), loaded after it by
+   index.html. Colour literals live above the end-of-tokens marker only.
+   ============================================================ */
+:root {
+  /* Paper */
+  --p-paper:#FFFFFF; --p-panel:#F4F5F6; --p-panel-2:#EBEDEF; --p-ground:#E3E5E7;
+  --p-ink:#101112; --p-ink-2:#4A4E52; --p-ink-3:#797E83;
+  --p-line:#D8DBDE; --p-line-hair:#EBEDEF;
+  /* Atomic blue — the site's own `--blue`, so the app and atomicagent.io
+     are the same product. It is ~10:1 on white, so `-deep` is a genuine step
+     darker for pressed states rather than a contrast rescue. */
+  --p-accent:#0B3D91; --p-accent-deep:#082C6B; --p-amber:#E8A317; --p-black:#0B0B0C;
+  --p-critical:#C4342F;
+  /* Soft Tactile, Paper. --well is the window ground behind floating panels
+     and the inside of inset wells; --lift is every floating surface. Green is
+     new to the desktop and means done / added only. --amber stays the fill;
+     --amber-text is amber that reads as words on a light ground. */
+  --p-well:#F1F2F4; --p-lift:#FFFFFF; --p-tint:#E3ECFF;
+  --p-success:#136C33; --p-amber-text:#7A5300; --p-reasoning:#6B30BD;
+  --p-hl:rgba(255,255,255,.8);
+  --p-sh-card:0 1px 2px rgba(16,17,18,.05),0 10px 28px -12px rgba(16,17,18,.18);
+  --p-sh-pop:0 0 0 1px rgba(16,17,18,.07),0 28px 64px -18px rgba(16,17,18,.38);
+  --p-sh-comp:0 14px 40px -12px rgba(41,71,147,.30),inset 0 1px 0 var(--p-hl);
+  --p-sh-soft:0 1px 3px rgba(0,0,0,.14);
+
+  /* Ink */
+  --i-paper:#0E0F10; --i-panel:#17191B; --i-panel-2:#1E2124; --i-ground:#000000;
+  --i-ink:#EDEFF1; --i-ink-2:#A6ACB2; --i-ink-3:#767C82;
+  --i-line:#2A2E32; --i-line-hair:#212528;
+  /* Lifted for a dark ground: #0B3D91 on #0E0F10 is 1.6:1 and unreadable.
+     Same hue, taken up until it carries. */
+  --i-accent:#5B9DFF; --i-accent-deep:#8FBCFF; --i-amber:#F0B44A; --i-black:#000000;
+  --i-critical:#FF6A5C;
+  /* Soft Tactile, Ink. Every dark shadow carries a faint white ring so
+     surfaces stay separated on near-black. */
+  --i-well:#0B0C0D; --i-lift:#1A1C1F; --i-tint:#16233F;
+  --i-success:#5EDB81; --i-amber-text:#F0B44A; --i-reasoning:#BB9AF4;
+  --i-hl:rgba(255,255,255,.06);
+  --i-sh-card:0 0 0 1px rgba(255,255,255,.05),0 10px 28px -12px rgba(0,0,0,.7);
+  --i-sh-pop:0 0 0 1px rgba(255,255,255,.08),0 28px 64px -18px rgba(0,0,0,.85);
+  --i-sh-comp:0 0 0 1px rgba(255,255,255,.07),0 14px 40px -12px rgba(0,0,0,.8),inset 0 1px 0 var(--i-hl);
+  --i-sh-soft:0 0 0 1px rgba(255,255,255,.06),0 1px 3px rgba(0,0,0,.5);
+
+  /* Same in both themes — declared once, never re-pointed.
+     --brand is the fill that must be seen (user bubble, running dot, focus
+     ring, blue "go" buttons); its label is white in both themes (4.7:1).
+     Brand blue is never body text on --panel — words in blue use --accent.
+     --indigo is the colour block (approval card, onboarding rail, splash),
+     with --on-indigo / --indigo-muted as the text on it. */
+  --brand:#006AFF; --brand-press:#0058D6; --on-strong:#FFFFFF; --on-brand:var(--on-strong);
+  --indigo:#294793; --on-indigo:#EEF1F6; --indigo-muted:#B9C8EA;
+  --badge-ring:rgba(16,17,18,.10);
+  --glass:rgba(255,255,255,.16); --glass-soft:rgba(255,255,255,.14);
+  --glass-12:rgba(255,255,255,.12); --glass-18:rgba(255,255,255,.18); --glass-20:rgba(255,255,255,.2);
+  --sink-on-indigo:rgba(0,0,0,.24);
+  --caution-on-indigo:#FFD27A; --caution-on-indigo-wash:rgba(255,210,122,.2);
+  --indigo-shadow:rgba(41,71,147,.8);
+  --critical-block:#AD2E29; --critical-shadow:rgba(196,52,47,.7); --on-critical-muted:#F4C7C4;
+  --scrim:rgba(10,12,20,.32);
+  --shade-14:rgba(0,0,0,.14); --shade-25:rgba(0,0,0,.25); --shade-30:rgba(0,0,0,.3);
+  --shade-40:rgba(0,0,0,.4); --shade-50:rgba(0,0,0,.5);
+
+  /* Live palette — Paper by default */
+  --paper:var(--p-paper); --panel:var(--p-panel); --panel-2:var(--p-panel-2);
+  --ground:var(--p-ground);
+  --ink:var(--p-ink); --ink-2:var(--p-ink-2); --ink-3:var(--p-ink-3);
+  --line:var(--p-line); --line-hair:var(--p-line-hair);
+  --accent:var(--p-accent); --accent-deep:var(--p-accent-deep); --amber:var(--p-amber);
+  /* Status grammar: running = brand (pulsing), waiting for you = amber,
+     failed = critical, done = success. */
+  --critical:var(--p-critical);
+  --black:var(--p-black);
+  /* The label colour that sits ON a filled accent, and it has to follow the
+     theme. Paper's accent is a deep blue and takes white (10:1); Ink's is a
+     lifted blue and takes near-black (7:1). */
+  --p-on-fill:#FFFFFF; --i-on-fill:#0B0B0C;
+  --on-fill:var(--p-on-fill);
+  /* The round badge behind a brand mark. White on Paper; on Ink a white
+     disc glared against the near-black, so it steps down to a light grey
+     that still carries the black marks (Danya, 30.09). */
+  --p-badge:#FFFFFF; --i-badge:#D3D7DB;
+  --badge:var(--p-badge);
+  --well:var(--p-well); --lift:var(--p-lift); --tint:var(--p-tint);
+  --success:var(--p-success); --amber-text:var(--p-amber-text); --reasoning:var(--p-reasoning);
+  --hl:var(--p-hl);
+  --sh-card:var(--p-sh-card); --sh-pop:var(--p-sh-pop); --sh-comp:var(--p-sh-comp);
+  --sh-soft:var(--p-sh-soft);
+  /* Hairlines and outlines (kbd, line chips, menu separators): ink at 9% and
+     14%, so they follow the theme by construction. */
+  --bd:color-mix(in srgb, var(--ink) 9%, transparent);
+  --bd-2:color-mix(in srgb, var(--ink) 14%, transparent);
+  /* Washes. Every tint in the system is one of these, so a hover or a
+     selection means the same thing on every surface. */
+  --hover:color-mix(in srgb, var(--ink) 6%, transparent);
+  --press:color-mix(in srgb, var(--ink) 10%, transparent);
+  --divider:color-mix(in srgb, var(--ink) 6%, transparent);
+  --brand-wash:color-mix(in srgb, var(--brand) 11%, transparent);
+  --brand-wash-2:color-mix(in srgb, var(--brand) 18%, transparent);
+  --amber-wash:color-mix(in srgb, var(--amber) 18%, transparent);
+  --critical-wash:color-mix(in srgb, var(--critical) 11%, transparent);
+  --success-tint:color-mix(in srgb, var(--success) 12%, transparent);
+  --focus-ring:0 0 0 4px color-mix(in srgb, var(--brand) 18%, transparent);
+  /* The reference CSS's names for tokens the app already carries with the
+     same values, so rules ported from the Tactile reference work unchanged. */
+  --blue:var(--accent); --blue-deep:var(--accent-deep);
+  --on-blue:var(--on-fill); --hair:var(--line-hair);
+  color-scheme:light;
+
+  /* Type. Figtree for what a person reads, DM Mono for what a machine wrote.
+     Figtree has no Cyrillic: Inter (vendored with the cyrillic subset) must
+     stay second or Russian renders in a random fallback. DM Mono has none
+     either; ui-monospace / Menlo catch it. */
+  --font-ui:"Figtree","Inter",system-ui,sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --fs-label:12px; --fs-cap:13px; --fs-body:14.5px; --fs-sub:17px;
+  --fs-title:20px; --fs-display:34px;
+  --tr-display:-0.04em; --tr-sub:-0.02em; --tr-label:0;
+
+  /* Space — 4px base. */
+  --s1:4px; --s2:8px; --s3:8px; --s4:12px; --s5:16px; --s6:24px; --s7:24px; --s8:32px;
+  --s9:48px; --s10:64px;
+
+  /* Radius. Soft Tactile rounds everything interactive fully; containers get
+     rounder as they get bigger. */
+  --r-pill:999px;  /* buttons, chips that are buttons, pill selects, segmented, inputs, sidebar rows, toasts, dots */
+  --r-kbd:6px;     /* keycaps */
+  --r-badge:6px;   /* badges that say something and do nothing; a pill is a control (Danya, 01.10) */
+  --r-well:12px;   /* readouts, code / output blocks, menu items */
+  --r-row:14px;    /* list rows */
+  --r-panel:16px;  /* sidebar, inspector, drawer, tool cards */
+  --r-pop:18px;    /* popovers */
+  --r-card:20px;   /* cards, lists */
+  --r-block:22px;  /* approval block, route cards */
+  --r-sheet:24px;  /* sheets, palette */
+  --r-comp:26px;   /* composer, settings window, alert */
+  /* Legacy shape tokens. `--r` now rounds the few old rules still using it
+     like a well; `--rule` stays 3px only until the last selection cue that
+     reads it is restyled — Soft Tactile draws no 3px rules. */
+  --r:10px; --rule:3px; --dot:999px;
+
+  /* Motion — state 120ms, panels 180ms, one easing curve. */
+  --t-state:120ms; --t-panel:180ms; --ease:cubic-bezier(.2,.7,.3,1);
+
+  /* Legacy bridge. The app's rules were written against these names;
+     pointing them at the system converts every one of them at once, and each
+     is a semantic mapping, not a rename. */
+  --bg-desktop:var(--well); --bg-window:var(--well); --bg-content:var(--well);
+  --bg-raised:var(--lift); --bg-overlay:var(--lift); --bg-sunken:var(--well);
+  --bg-hover:var(--hover); --bg-active:var(--press);
+  --text-primary:var(--ink); --text-secondary:var(--ink-2);
+  --text-tertiary:var(--ink-3); --text-disabled:var(--ink-3);
+  --line-soft:var(--divider); --line-strong:var(--bd-2);
+  --accent-hover:var(--accent-deep); --accent-press:var(--accent-deep);
+  --accent-text:var(--accent); --accent-wash:var(--brand-wash);
+  --accent-wash-soft:var(--hover); --accent-line:var(--brand-wash-2);
+  --success-wash:var(--success-tint); --ok:var(--success);
+  --warn:var(--amber-text); --warn-wash:var(--amber-wash); --warn-border:var(--amber);
+  --danger:var(--critical); --danger-wash:var(--critical-wash);
+  --shadow-overlay:var(--sh-pop); --shadow-window:none;
+  --sidebar-tint:var(--lift);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper:var(--i-paper); --panel:var(--i-panel); --panel-2:var(--i-panel-2);
+  --ground:var(--i-ground);
+  --ink:var(--i-ink); --ink-2:var(--i-ink-2); --ink-3:var(--i-ink-3);
+  --line:var(--i-line); --line-hair:var(--i-line-hair);
+  --accent:var(--i-accent); --accent-deep:var(--i-accent-deep); --amber:var(--i-amber);
+  --critical:var(--i-critical);
+  --on-fill:var(--i-on-fill); --badge:var(--i-badge);
+  --black:var(--i-black);
+  --well:var(--i-well); --lift:var(--i-lift); --tint:var(--i-tint);
+  --success:var(--i-success); --amber-text:var(--i-amber-text); --reasoning:var(--i-reasoning);
+  --hl:var(--i-hl);
+  --sh-card:var(--i-sh-card); --sh-pop:var(--i-sh-pop); --sh-comp:var(--i-sh-comp);
+  --sh-soft:var(--i-sh-soft);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"] {
+  --paper:var(--i-paper); --panel:var(--i-panel); --panel-2:var(--i-panel-2);
+  --ground:var(--i-ground);
+  --ink:var(--i-ink); --ink-2:var(--i-ink-2); --ink-3:var(--i-ink-3);
+  --line:var(--i-line); --line-hair:var(--i-line-hair);
+  --accent:var(--i-accent); --accent-deep:var(--i-accent-deep); --amber:var(--i-amber);
+  --critical:var(--i-critical);
+  --on-fill:var(--i-on-fill); --badge:var(--i-badge);
+  --black:var(--i-black);
+  --well:var(--i-well); --lift:var(--i-lift); --tint:var(--i-tint);
+  --success:var(--i-success); --amber-text:var(--i-amber-text); --reasoning:var(--i-reasoning);
+  --hl:var(--i-hl);
+  --sh-card:var(--i-sh-card); --sh-pop:var(--i-sh-pop); --sh-comp:var(--i-sh-comp);
+  --sh-soft:var(--i-sh-soft);
+  color-scheme:dark;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-state:0ms; --t-panel:0ms; }
+}
+/* === end tokens === */
+
+/* ============================================================
+   BASE
+   ============================================================ */
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--well); color:var(--ink);
+  font-family:var(--font-ui); font-size:14px; line-height:1.45; letter-spacing:-.003em;
+  -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+/* Resets sit inside :where() so they never outrank a component rule — a
+   `button{color:inherit}` at a higher specificity once blanked the label of
+   every filled button in the reference. */
+:where(button){font:inherit;color:inherit;letter-spacing:inherit;background:none;border:none;padding:0;cursor:pointer;text-align:left}
+:where(input,textarea,select){font:inherit;color:inherit;letter-spacing:inherit}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+::selection{background:var(--brand-wash-2);color:var(--ink)}
+svg{display:block;flex:none}
+.tnum{font-variant-numeric:tabular-nums}
+.mono,.t-mono{font-family:var(--font-mono);font-size:12px;line-height:18px;letter-spacing:0;font-variant-numeric:tabular-nums}
+/* The 0.5.5 uppercase micro label is retired: sentence case, a weight step
+   and a quieter ink carry "this names what follows". */
+.micro{font-size:12px;line-height:16px;font-weight:600;color:var(--ink-2);letter-spacing:0;text-transform:none}
+.cap{font-size:12px;line-height:16px;color:var(--ink-2)}
+.sec{color:var(--ink-2)} .ter{color:var(--ink-3)}
+.hd{font-size:15px;line-height:20px;font-weight:600;letter-spacing:-.015em}
+.ttl{font-size:17px;line-height:22px;font-weight:600;letter-spacing:-.02em}
+.t-label{font-size:12px;font-weight:600;color:var(--ink-2);line-height:1.45}
+.t-body{font-size:var(--fs-body);line-height:1.5;color:var(--ink)}
+.t-sub{font-size:var(--fs-sub);letter-spacing:var(--tr-sub);font-weight:600;line-height:1.25}
+.t-title{font-size:var(--fs-title);letter-spacing:-.03em;font-weight:600;line-height:1.2}
+.t-display{font-size:var(--fs-display);letter-spacing:var(--tr-display);font-weight:600;line-height:1.1}
+.readout,.num,.gaugeval,.ctxnum{font-variant-numeric:tabular-nums}
+.hide{display:none!important}
+.stack{display:flex;flex-direction:column;gap:var(--s5)}
+.hstack{display:flex;align-items:center;gap:var(--s3)}
+.rule-title{border:0;height:1px;background:var(--bd);margin:var(--s4) 0 var(--s5)}
+.rule-title.red{background:var(--bd)}
+.rule-hair{border:0;height:1px;background:var(--bd);margin:0}
+.scroller,#content,.pane,.tabbody{scrollbar-gutter:stable}
+/* Chat review (Д22): scrollbars in the theme's own ink — a quiet thumb on no
+   track — instead of the system's white track on the grey window ground. The
+   property is inherited, so this one rule reaches every scroller in the page;
+   being the standard property, it leaves macOS's overlay bars overlay where
+   the system draws them that way. The onboarding lists draw their own always-
+   visible bars with the -webkit- pseudo-elements, which this property would
+   switch off, so they opt out (onboarding.css explains why they need them). */
+body{scrollbar-color:color-mix(in srgb, var(--ink) 24%, transparent) transparent}
+#onboarding .ob-scroll,#onboarding .ob-wizlist{scrollbar-color:auto}
+
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes flash{0%,100%{background:transparent}30%{background:var(--brand-wash-2)}}
+.flash{animation:flash .5s var(--ease)}
+/* Reduced motion: decorative motion goes, progress spinners keep turning at
+   a slower pace — a frozen spinner reads as a hang.
+   ATO-251: transitions go to 0s, not 80ms. transition-property defaults to
+   `all`, so an 80ms duration on every element animated what had no
+   transition at all: the page ground, the badge colours, the transcript's
+   bottom room. With "Show animations" off (common on Windows) the window
+   was handed the old theme's ground, and the download card covered the
+   approval it should have lifted. */
+@media (prefers-reduced-motion: reduce){
+  *:not(.tk-spin):not(.sspin){animation:none!important;transition-duration:0s!important}
+  .tk-spin,.sspin{animation-duration:2.4s!important}
+}
+
+/* ============================================================
+   KIT — the shared Soft Tactile components.
+   Region files (css/*.css) compose these; they do not redefine them.
+   App class names the renderer already emits keep working (.btn, .btn-p,
+   .kc, .seg, .iconbtn, .plate, .ann, .readout…); new markup uses the
+   `tk-` prefix so nothing collides with the 0.5.5 vocabulary.
+   ============================================================ */
+
+/* ---- Buttons ----
+   .btn-p primary (ink pill) · .btn-blue brand "go" · .btn-t secondary (brand
+   tint) · .btn-s neutral · .btn-g ghost · .btn-danger destructive entry ·
+   .btn-df destructive fill (confirms only) · .btn-white / .btn-glass on
+   indigo and brand fills. Sizes: default 34 · .sm 30 · .xs 26 · .lg 44. */
+.btn,.b{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 14px;
+  border-radius:var(--r-pill);border:0;background:var(--hover);color:var(--ink);
+  font:600 13.5px/1 var(--font-ui);letter-spacing:-.003em;white-space:nowrap;cursor:pointer;flex:none;position:relative;
+  transition:background var(--t-state) var(--ease),color var(--t-state) var(--ease),transform var(--t-state) var(--ease)}
+.btn:hover,.b:hover{background:var(--press)}
+.btn.sm,.b.sm{height:30px;padding:0 12px;font-size:12.5px}
+.btn.xs{height:26px;padding:0 10px;font-size:12px}
+.btn.lg{height:44px;padding:0 22px;font-size:14.5px}
+.btn.icon{width:34px;padding:0}.btn.icon.sm{width:30px}.btn.icon.xs{width:26px}
+.btn svg{width:15px;height:15px}
+.btn-p,.b-primary{background:var(--ink);color:var(--paper)}
+.btn-p:hover,.b-primary:hover{background:color-mix(in srgb, var(--ink) 84%, var(--paper));color:var(--paper)}
+.btn-blue{background:var(--brand);color:var(--on-strong)}
+.btn-blue:hover{background:var(--brand-press);color:var(--on-strong)}
+.btn-t{background:var(--brand-wash);color:var(--blue)}
+.btn-t:hover{background:var(--brand-wash-2);color:var(--blue-deep)}
+.btn-s{background:var(--hover);color:var(--ink)}
+.btn-s:hover{background:var(--press)}
+.btn-g,.b-quiet{background:transparent;color:var(--ink-2)}
+.btn-g:hover,.b-quiet:hover{background:var(--hover);color:var(--ink)}
+.btn-danger{background:var(--critical-wash);color:var(--critical)}
+.btn-danger:hover{background:color-mix(in srgb, var(--critical) 18%, transparent);color:var(--critical)}
+.btn-df{background:var(--critical);color:var(--on-fill)}
+.btn-df:hover{background:color-mix(in srgb, var(--critical) 86%, var(--ink));color:var(--on-fill)}
+.btn-white{background:var(--on-strong);color:var(--indigo)}
+.btn-white:hover{background:var(--on-indigo);color:var(--indigo)}
+.btn-glass{background:var(--glass);color:var(--on-strong)}
+.btn-glass:hover{background:var(--glass-20);color:var(--on-strong)}
+.btn[disabled],.btn.is-disabled,.b:disabled,.b[aria-disabled="true"]{background:var(--panel-2);color:var(--ink-3);cursor:default;transform:none}
+.btn-g[disabled]{background:transparent}
+.btn.is-loading{color:transparent!important}
+.btn.is-loading::after{content:"";position:absolute;width:13px;height:13px;border-radius:50%;
+  border:2px solid currentColor;border-color:var(--ink-3);border-right-color:transparent;animation:spin .8s linear infinite}
+.btn:focus-visible,.b:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.guard{display:inline-flex;align-items:center;gap:var(--s1)}
+.guard .b-confirm{background:var(--critical);color:var(--on-strong)}
+
+/* ---- Keycap ---- */
+.kc,.tk-kbd{min-width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px;
+  border:1px solid var(--bd-2);border-radius:var(--r-kbd);background:transparent;
+  font:400 10.5px/1 var(--font-mono);color:var(--ink-3);letter-spacing:0;white-space:nowrap;flex:none}
+.btn .kc{margin-left:2px}
+.btn-p .kc{color:color-mix(in srgb, var(--paper) 72%, transparent);border-color:color-mix(in srgb, var(--paper) 30%, transparent)}
+.btn-blue .kc,.btn-df .kc,.btn-glass .kc{color:var(--on-strong);border-color:var(--glass-20)}
+.btn-white .kc{color:var(--indigo);border-color:color-mix(in srgb, var(--indigo) 30%, transparent)}
+.btn-t .kc{color:var(--blue);border-color:color-mix(in srgb, var(--blue) 30%, transparent)}
+.btn-danger .kc{color:var(--critical);border-color:color-mix(in srgb, var(--critical) 30%, transparent)}
+
+/* ---- Round icon button (32) ---- */
+.iconbtn{width:32px;height:32px;display:flex;align-items:center;justify-content:center;flex:none;
+  border-radius:var(--r-pill);color:var(--ink-2);background:transparent;
+  transition:background var(--t-state) var(--ease),color var(--t-state) var(--ease)}
+.iconbtn:hover{background:var(--hover);color:var(--ink)}
+.iconbtn.on{background:var(--tint);color:var(--blue)}
+.iconbtn[disabled]{color:var(--ink-3);cursor:default;background:transparent}
+.iconbtn.sm{width:26px;height:26px}
+
+/* ---- Segmented control ---- */
+.seg,.tk-seg{display:inline-flex;align-items:center;gap:2px;padding:3px;border-radius:var(--r-pill);
+  background:var(--hover);height:auto;border:0}
+.seg button,.tk-seg button{height:28px;padding:0 13px;border:0;border-radius:var(--r-pill);background:transparent;
+  color:var(--ink-2);font:600 12.5px/1 var(--font-ui);display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;
+  box-shadow:none;transition:background var(--t-state) var(--ease),color var(--t-state) var(--ease)}
+.seg button:hover,.tk-seg button:hover{color:var(--ink)}
+.seg button.on,.seg.spend button.on,.tk-seg button.on,.tk-seg button[aria-pressed="true"]{background:var(--lift);color:var(--ink);box-shadow:var(--sh-soft)}
+.seg button[disabled],.tk-seg button[disabled]{color:var(--ink-3);cursor:default}
+.tk-seg.lg button{height:34px;padding:0 18px;font-size:13.5px}
+.tk-seg.full{display:flex}.tk-seg.full button{flex:1}
+
+/* ---- Dots, spinner ---- */
+.dot,.tk-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--ink-3)}
+.dot.ok,.tk-dot--green{background:var(--success)}
+.dot.run,.tk-dot--brand{background:var(--brand)}
+.dot.warn,.tk-dot--amber{background:var(--amber)}
+.dot.bad,.tk-dot--red{background:var(--critical)}
+.dot.run,.tk-dot--pulse{animation:pulse 1.6s var(--ease) infinite}
+.tk-dot--hollow{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink-3)}
+.tk-spin{display:inline-block;width:14px;height:14px;border-radius:50%;flex:none;border:2px solid var(--brand-wash-2);border-top-color:var(--brand);animation:spin .9s linear infinite}
+.tk-spin.on-fill{border-color:var(--glass);border-top-color:var(--on-strong)}
+
+/* ---- Chips ----
+   28px, tones carry state. Never a green fill behind text: green chips
+   are a tint with green words. A chip that only says something (a status,
+   a tag, a count) is a rounded rectangle; only a chip that is a button is a
+   pill, so a badge is never taken for a button (Danya, 01.10). */
+.tk-chip,.ann{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:var(--r-badge);
+  background:var(--hover);color:var(--ink-2);font:500 12.5px/1 var(--font-ui);letter-spacing:0;text-transform:none;
+  white-space:nowrap;max-width:100%;flex:none}
+.tk-chip svg{width:14px;height:14px}
+.tk-chip--sm,.ann{height:22px;padding:0 8px;font-size:11.5px}
+.tk-chip--blue{background:var(--brand-wash);color:var(--blue)}
+.tk-chip--amber,.ann.caution{background:var(--amber-wash);color:var(--amber-text)}
+.tk-chip--red,.ann.critical{background:var(--critical-wash);color:var(--critical)}
+.tk-chip--green,.ann.lit{background:var(--success-tint);color:var(--success)}
+.tk-chip--indigo{background:var(--indigo);color:var(--on-indigo)}
+.tk-chip--line{background:transparent;box-shadow:inset 0 0 0 1px var(--bd-2)}
+button.tk-chip{cursor:pointer;border-radius:var(--r-pill)}
+button.tk-chip:hover{background:var(--press)}
+
+/* ---- Icon badge and brand logos ----
+   Brand marks always sit on a light round badge (white, light grey in the
+   dark theme) so mono marks read in both themes. Never recolour a mark. */
+.tk-ico{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--hover);color:var(--ink-2)}
+.tk-ico svg{width:16px;height:16px}
+.tk-ico--sm{width:24px;height:24px}.tk-ico--sm svg{width:13px;height:13px}
+.tk-ico--xs{width:20px;height:20px}.tk-ico--xs svg{width:12px;height:12px}
+.tk-ico--lg{width:44px;height:44px}.tk-ico--lg svg{width:20px;height:20px}
+.tk-ico--blue{background:var(--brand-wash);color:var(--blue)}
+.tk-ico--brand{background:var(--brand);color:var(--on-strong)}
+.tk-ico--indigo{background:var(--indigo);color:var(--on-indigo)}
+.tk-ico--amber{background:var(--amber-wash);color:var(--amber-text)}
+.tk-ico--red{background:var(--critical-wash);color:var(--critical)}
+.tk-ico--green{background:var(--success-tint);color:var(--success)}
+.logo{width:30px;height:30px;border-radius:50%;background:var(--badge);box-shadow:inset 0 0 0 1px var(--badge-ring);
+  display:grid;place-items:center;flex:none;overflow:hidden}
+/* The mark fills three quarters of the badge; at 62% it read as small. */
+.logo img{width:74%;height:74%;object-fit:contain;display:block}
+.logo--sm{width:22px;height:22px}.logo--xs{width:18px;height:18px}.logo--lg{width:44px;height:44px}
+/* A model with no mark, or whose file did not load (markFallbackHTML): its
+   icon on the logo's own disc and at the logo's sizes, so it reads as meant
+   and not as a failed image. The disc is light in both themes, so the icon
+   is Paper's ink in both. */
+.tk-ico--mark{width:30px;height:30px;background:var(--badge);box-shadow:inset 0 0 0 1px var(--badge-ring);color:var(--p-ink-2)}
+.tk-ico--mark.tk-ico--sm{width:22px;height:22px}.tk-ico--mark.tk-ico--xs{width:18px;height:18px}.tk-ico--mark.tk-ico--lg{width:44px;height:44px}
+.tk-ico--mark svg,.tk-ico--mark.tk-ico--sm svg,.tk-ico--mark.tk-ico--xs svg,.tk-ico--mark.tk-ico--lg svg{width:56%;height:56%}
+
+/* ---- Inputs ----
+   A pill well that lifts on focus. Put .tk-inp on the <input> itself;
+   .tk-field stacks label · input · help. */
+.tk-inp,.field-inp{height:38px;min-width:0;padding:0 15px;border-radius:var(--r-pill);border:1px solid transparent;
+  background:var(--well);color:var(--ink);font:400 14px/1 var(--font-ui);outline:none;
+  transition:background var(--t-state) var(--ease),border-color var(--t-state) var(--ease),box-shadow var(--t-state) var(--ease)}
+.tk-inp::placeholder,.field-inp::placeholder{color:var(--ink-3)}
+.tk-inp:hover:not(:disabled){border-color:var(--bd)}
+.tk-inp:focus,.field-inp:focus{background:var(--lift);border-color:var(--brand);box-shadow:var(--focus-ring)}
+.tk-inp:disabled{color:var(--ink-3);cursor:not-allowed}
+.tk-inp.sm{height:32px;padding:0 12px;font-size:13px}
+.tk-inp.lg{height:48px;padding:0 18px;font-size:15px}
+.tk-inp.mono{font-family:var(--font-mono);font-size:12.5px}
+.tk-inp.is-error{background:var(--lift);border-color:var(--critical);box-shadow:0 0 0 4px var(--critical-wash)}
+.tk-inp.is-warn{border-color:var(--amber)}
+textarea.tk-inp,.tk-area{height:auto;min-height:88px;padding:11px 15px;border-radius:18px;line-height:1.5;resize:vertical}
+.tk-inpwrap{display:flex;align-items:center;gap:8px;height:38px;padding:0 6px 0 14px;border-radius:var(--r-pill);
+  background:var(--well);border:1px solid transparent;color:var(--ink-3);min-width:0}
+.tk-inpwrap:focus-within{background:var(--lift);border-color:var(--brand);box-shadow:var(--focus-ring)}
+.tk-inpwrap input{flex:1;min-width:0;height:100%;border:0;background:transparent;outline:none;color:var(--ink);font-size:14px}
+.tk-inpwrap input::placeholder{color:var(--ink-3)}
+.tk-field{display:grid;gap:7px;min-width:0}
+.tk-lbl{font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.tk-help{font-size:12.5px;line-height:1.45;color:var(--ink-2)}
+.tk-help--err{color:var(--critical)}.tk-help--warn{color:var(--amber-text)}.tk-help--ok{color:var(--success)}
+
+/* Switch, check, radio, progress. Use real buttons with aria-checked. */
+.tk-switch{width:38px;height:22px;border-radius:var(--r-pill);background:var(--panel-2);position:relative;flex:none;
+  display:inline-block;box-shadow:inset 0 0 0 1px var(--bd);cursor:pointer;transition:background var(--t-state) var(--ease)}
+.tk-switch::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:var(--on-strong);box-shadow:0 1px 3px var(--shade-25);transition:left var(--t-state) var(--ease)}
+.tk-switch.on,.tk-switch[aria-checked="true"]{background:var(--brand);box-shadow:none}
+.tk-switch.on::after,.tk-switch[aria-checked="true"]::after{left:19px}
+.tk-switch[disabled]{opacity:.5;cursor:default}
+.tk-check{width:18px;height:18px;border-radius:6px;box-shadow:inset 0 0 0 1.5px var(--ink-3);display:inline-grid;place-items:center;flex:none;color:var(--on-strong)}
+.tk-check svg{width:12px;height:12px;stroke-width:2.6;opacity:0}
+.tk-check.on{background:var(--brand);box-shadow:none}.tk-check.on svg{opacity:1}
+.radio,.tk-radio{width:18px;height:18px;border-radius:50%;border:0;box-shadow:inset 0 0 0 1.5px var(--ink-3);flex:none;position:relative;margin-top:0;background:transparent}
+.radio.on,.tk-radio.on{background:transparent;box-shadow:inset 0 0 0 1.5px var(--brand)}
+.radio.on::after,.tk-radio.on::after{content:"";position:absolute;inset:4px;border-radius:50%;background:var(--brand)}
+.slider{width:100%;accent-color:var(--brand)}
+.tk-prog{height:6px;border-radius:var(--r-pill);background:var(--panel-2);overflow:hidden;min-width:40px;flex:1}
+.tk-prog > i{display:block;height:100%;border-radius:inherit;background:var(--brand);transition:width .3s var(--ease)}
+.tk-prog--amber > i{background:var(--amber)}.tk-prog--red > i{background:var(--critical)}
+
+/* ---- Surfaces ---- */
+.tk-card,.panelcard{background:var(--lift);border:0;border-radius:var(--r-card);box-shadow:var(--sh-card);min-width:0}
+.tk-card.pad,.panelcard{padding:18px;display:flex;flex-direction:column;gap:var(--s4)}
+.tk-well{background:var(--well);border-radius:var(--r-well);padding:10px 12px}
+.tk-out{margin:0;padding:10px 12px;border-radius:var(--r-well);background:var(--well);color:var(--ink);
+  font:400 12px/1.6 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto}
+.tk-notice{display:flex;align-items:center;gap:10px;padding:10px 12px 10px 14px;border-radius:18px;
+  background:var(--lift);box-shadow:var(--sh-card);font-size:13px;line-height:1.45;color:var(--ink);min-width:0}
+.tk-notice > svg{flex:none}
+.tk-notice--amber{background:color-mix(in srgb, var(--amber) 13%, var(--lift));box-shadow:none}
+.tk-notice--amber > svg{color:var(--amber-text)}
+.tk-notice--red{background:color-mix(in srgb, var(--critical) 8%, var(--lift));box-shadow:none}
+.tk-notice--red > svg{color:var(--critical)}
+.tk-notice--blue{background:color-mix(in srgb, var(--brand) 9%, var(--lift));box-shadow:none}
+.tk-notice--blue > svg{color:var(--blue)}
+.tk-notice--green{background:color-mix(in srgb, var(--success) 9%, var(--lift));box-shadow:none}
+.tk-notice--green > svg{color:var(--success)}
+.tk-notice .grow{flex:1;min-width:0}
+.tk-divider{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--ink-2)}
+.tk-divider::before,.tk-divider::after{content:"";flex:1;height:1px;background:var(--bd)}
+
+/* ---- Lists ----
+   .tk-list is a lifted card; .tk-li rows are ≥46px with inset dividers and
+   a brand-tint selection. Row titles .t, descriptions .d. */
+.tk-list{display:flex;flex-direction:column;background:var(--lift);border-radius:var(--r-card);box-shadow:var(--sh-card);padding:6px;min-width:0}
+.tk-li,.rows > .row{display:flex;align-items:center;gap:12px;min-height:46px;padding:7px 12px;border-radius:var(--r-row);
+  border:0;background:transparent;color:var(--ink);text-align:left;width:100%;min-width:0;position:relative;
+  transition:background var(--t-state) var(--ease)}
+button.tk-li,.rows > .row{cursor:pointer}
+.tk-li + .tk-li,.rows > .row + .row{box-shadow:0 -1px 0 var(--divider)}
+button.tk-li:hover,.tk-li.is-hover,.rows > .row:hover{background:var(--hover)}
+.tk-li.on,.tk-li[aria-selected="true"],.rows > .row.on,.rows > .row[aria-selected="true"]{background:var(--brand-wash);box-shadow:none}
+.tk-li.on + .tk-li,.rows > .row.on + .row{box-shadow:none}
+.tk-li.dim{color:var(--ink-3)}
+.tk-li:focus-visible,.rows > .row:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+.tk-li .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.tk-li .t{font-size:14px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-li.on .t{color:var(--blue)}
+.tk-li .d{font-size:12.5px;line-height:1.4;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis}
+.tk-li .m{font:400 11.5px/1 var(--font-mono);color:var(--ink-3);flex:none;white-space:nowrap}
+.rows{display:flex;flex-direction:column}
+.rows .row .nm{font-weight:600}
+.rows .row .sub{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-3)}
+.row{display:flex;align-items:center;gap:var(--s4);min-height:40px;padding:0 var(--s5);width:100%;border-radius:var(--r-row)}
+.row:hover{background:var(--hover)}
+.row.on{background:var(--brand-wash)}
+.row .main{flex:1;min-width:0;display:flex;align-items:center;gap:var(--s3)}
+.row .t{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .meta{font-size:12px;color:var(--ink-2);white-space:nowrap}
+.row .acts{display:none;gap:var(--s1)}
+.row:hover .acts{display:flex}
+
+/* Settings-style row: body + control, ≥50px. */
+.tk-setrow{display:flex;align-items:center;gap:16px;min-height:50px;padding:8px 16px;min-width:0}
+.tk-setrow + .tk-setrow{box-shadow:0 -1px 0 var(--divider)}
+.tk-setrow .body{flex:1;min-width:0}
+.tk-setrow .t{font-weight:600;font-size:14px;color:var(--ink)}
+.tk-setrow .d{font-size:12.5px;line-height:1.45;color:var(--ink-2);margin-top:2px;max-width:62ch}
+
+/* Section header inside a pane: sentence case, never uppercase. */
+.tk-sh,.legend{display:flex;align-items:center;gap:8px;min-height:28px;padding:0 6px;
+  font:600 13px/1.3 var(--font-ui);color:var(--ink-2);letter-spacing:0;text-transform:none;background:transparent;border:0}
+.tk-sh .c{font-weight:500;font-size:12px;color:var(--ink-3)}
+.tk-sh .grow,.legend .spacer{flex:1}
+
+/* ---- Tables ---- */
+.tbl-wrap{overflow-x:auto}
+.tk-tbl,.tbl,.matrix{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.tk-tbl th,.tbl th,.matrix th{text-align:left;height:32px;padding:0 14px;font:600 12px/1.2 var(--font-ui);color:var(--ink-2);
+  letter-spacing:0;text-transform:none;border:0;white-space:nowrap}
+.tk-tbl td,.tbl td,.matrix td{height:38px;padding:0 14px;border:0;border-top:1px solid var(--divider);color:var(--ink-2);white-space:nowrap;box-shadow:none}
+.tk-tbl td:first-child,.tbl td:first-child,.matrix td:first-child{color:var(--ink);font-weight:600}
+.tk-tbl .num,.tbl .num{text-align:right;font-family:var(--font-mono)}
+.tk-tbl .mono{font-size:12px}
+.tk-tbl tbody tr{cursor:default}
+.tk-tbl tbody tr.click{cursor:pointer}
+.tk-tbl tbody tr.click:hover td{background:var(--hover)}
+.tk-tbl tbody tr.on td{background:var(--brand-wash)}
+.matrix td.col-on{background:var(--brand-wash)}
+.mdot{width:7px;height:7px;border-radius:50%;display:inline-block;vertical-align:middle;margin-right:5px;box-shadow:inset 0 0 0 1px var(--bd-2)}
+.mdot.auto{background:var(--brand);box-shadow:none}
+
+/* ---- Data plate: dt sans / dd mono ---- */
+.plate,.tk-plate{border:0;background:transparent;padding:0;font:400 12.5px/1.5 var(--font-ui);color:var(--ink-2)}
+.plate dl,.tk-plate{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 18px;margin:0}
+.plate dt,.tk-plate dt{color:var(--ink-2);text-transform:none;letter-spacing:0;font:400 12.5px/1.5 var(--font-ui);margin:0}
+.plate dd,.tk-plate dd{margin:0;font:400 12px/1.5 var(--font-mono);color:var(--ink);overflow-wrap:anywhere;min-width:0}
+.kvgrid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 18px;font-size:13px;margin:0}
+.kvgrid dt{color:var(--ink-2)} .kvgrid dd{margin:0;min-width:0;overflow-wrap:anywhere}
+
+/* Readout: machine text that counts in place. */
+.readout{display:inline-block;padding:0;background:transparent;color:var(--ink-2);
+  font:400 12px/20px var(--font-mono);text-align:left;border-radius:0}
+
+/* Checklist card. */
+.chk{display:flex;flex-direction:column;background:var(--lift);border-radius:var(--r-card);box-shadow:var(--sh-card);padding:6px}
+.chk .ln{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:var(--s4);padding:8px 12px;border-radius:var(--r-row)}
+.chk .ln + .ln{box-shadow:0 -1px 0 var(--divider)}
+.chk .ix{font:400 11px/1 var(--font-mono);color:var(--ink-3)}
+.chk .st{font:500 12px/1 var(--font-ui);color:var(--ink-2)}
+.chk .st.done{color:var(--success)}
+.chk .st.failed{color:var(--critical)}
+
+/* ---- Popover and menu items ---- */
+.tk-pop{background:var(--lift);border-radius:var(--r-pop);box-shadow:var(--sh-pop);padding:6px;display:flex;flex-direction:column;gap:1px;min-width:0}
+.tk-pop-h{display:flex;align-items:center;gap:8px;padding:8px 10px 4px;font:600 12px/1.3 var(--font-ui);color:var(--ink-2)}
+.tk-mi{display:flex;align-items:center;gap:10px;min-height:34px;padding:5px 10px;border-radius:12px;font-size:13.5px;
+  color:var(--ink);min-width:0;width:100%;text-align:left;cursor:pointer;background:transparent;border:0}
+.tk-mi:hover,.tk-mi.is-hover{background:var(--hover)}
+.tk-mi.on{background:var(--brand-wash)}
+.tk-mi.on .t{color:var(--blue)}
+.tk-mi.dis,.tk-mi[disabled]{color:var(--ink-3);cursor:default;background:transparent}
+.tk-mi > svg{color:var(--ink-3)}.tk-mi.on > svg{color:var(--blue)}
+.tk-mi .body{flex:1;min-width:0}
+.tk-mi .t{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-mi .d{display:block;font-size:12px;line-height:1.35;color:var(--ink-2);margin-top:1px}
+.tk-mi .r{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
+.tk-mi--danger{color:var(--critical)}.tk-mi--danger > svg{color:var(--critical)}
+.tk-sep{height:1px;background:var(--bd);margin:4px 8px;flex:none}
+
+/* ---- Modal confirm card (inside a pane or over the window) ---- */
+.tk-modal{background:var(--lift);border-radius:var(--r-card);box-shadow:var(--sh-pop);padding:18px 18px 14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.tk-modal--danger{box-shadow:0 0 0 1.5px color-mix(in srgb, var(--critical) 55%, transparent),var(--sh-pop)}
+.tk-modal--warn{box-shadow:0 0 0 1.5px color-mix(in srgb, var(--amber) 70%, transparent),var(--sh-pop)}
+.tk-modal h4{margin:0;font-size:16px;font-weight:600;letter-spacing:-.02em;color:var(--ink)}
+.tk-modal p{margin:0;font-size:13.5px;line-height:1.5;color:var(--ink-2)}
+.tk-modal .acts{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:4px}
+
+/* ---- Keycap hint strip: every hint is also a button ---- */
+.tk-hints{display:flex;align-items:center;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink-2)}
+.tk-hint{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 6px;border-radius:8px;color:var(--ink-2);font-size:12px;background:transparent}
+button.tk-hint:hover{background:var(--hover);color:var(--ink)}
+.tk-hint .kc + .kc{margin-left:-2px}
+
+/* ---- Empty state ---- */
+.tk-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:36px 20px;color:var(--ink-2)}
+.tk-empty h4{margin:0;font-size:15px;font-weight:600;color:var(--ink)}
+.tk-empty p{margin:0;font-size:13px;line-height:1.5;max-width:44ch}
+
+/* ---- Tooltip ---- */
+.tk-tip{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;background:var(--ink);color:var(--paper);
+  font-size:12px;white-space:nowrap;box-shadow:0 8px 20px -8px var(--shade-40)}
+.tk-tip .kc{color:var(--paper);border-color:color-mix(in srgb, var(--paper) 35%, transparent)}
+
+/* ---- Pane toolbar: a row of filters, search and actions above a list ---- */
+.tk-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.tk-bar .grow{flex:1;min-width:0}
+.tk-crumb{display:flex;align-items:baseline;gap:6px;min-width:0}
+.tk-crumb .k{font-size:12.5px;color:var(--ink-2)}
+.tk-crumb h3{margin:0;font-size:20px;font-weight:600;letter-spacing:-.03em;color:var(--ink);white-space:nowrap}

@@ -1,0 +1,1471 @@
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
+import type { Readable } from "node:stream";
+import { LineSplitter, lineLevel } from "./agent-output.js";
+// r5 item 9 — the supervised `atag serve` child gets the desktop state dir.
+import { agentEnv, DESKTOP_STATE_DIR } from "./state-dir.js";
+import { localLlamaKeyFor } from "./local-llama-key.js";
+import { chatSessionIdFor } from "./chat-session.js";
+import {
+  agentBinaryCandidates,
+  bundledAgentFileName,
+  commandLineProbe,
+  installHint,
+  looksLikeServeCommand,
+  procCmdline,
+  serveWatchArgs,
+  stopPlan,
+  WATCH_SENTINEL_SOURCE,
+  WINDOWS_GRACEFUL_MS,
+} from "./platform.js";
+
+/**
+ * Supervises one `atag serve` child process and speaks to it over the
+ * loopback HTTP API.
+ *
+ * Why HTTP and not the NDJSON sidecar: the sidecar entry point
+ * (`dist/sidecar/main.js`) only exists in a source checkout, while the
+ * shipped single-file binary exposes `serve`. A desktop app has to work
+ * against the thing users actually installed, so the desktop client
+ * drives the same surface the CLI documents:
+ *
+ *   GET  /health                    liveness + llama-server reachability
+ *   GET  /api/capabilities          paths, tool inventory, agent config
+ *   GET  /api/config                the user config file, verbatim
+ *   GET  /api/skills                installed skills
+ *   GET  /api/tasks                 durable tasks
+ *   GET  /api/sessions              persisted sessions
+ *   GET  /v1/models                 OpenAI-compatible model list
+ *   POST /v1/chat/completions       the agent loop, streamed as SSE
+ *   GET  /api/events                SSE stream of approval requests
+ *   POST /api/approval/resolve      allow-once | deny
+ *
+ * The server is bound to 127.0.0.1 on an ephemeral port and gated by a
+ * bearer token generated per launch, so nothing outside this app can
+ * reach the agent.
+ */
+
+export type AgentState =
+  | "stopped"
+  | "starting"
+  | "connected"
+  | "missing-binary"
+  | "error";
+
+export interface AgentStatus {
+  state: AgentState;
+  binary: string | null;
+  port: number | null;
+  workingDir: string;
+  llama: { url: string; reachable: boolean } | null;
+  error: string | null;
+}
+
+/**
+ * How long a freshly spawned `atag serve` gets to answer /health.
+ *
+ * Two very different boots hide behind one spawn. On a cloud route the
+ * agent is up in a second or two. On the LOCAL route it also probes the
+ * llama backend, and the managed daemon beside it is loading a
+ * multi-gigabyte GGUF off disk — measured here at 3 s on an idle Mac, but
+ * far longer whenever the disk is busy (a model download running in
+ * another window is enough). Thirty seconds was fine for the cloud case
+ * and too tight for the local one: the agent came back a few seconds
+ * later, healthy, having already told the operator it had failed.
+ *
+ * So the local route gets a longer rope. This is patience, not a
+ * pretence: the window still says the agent is starting the whole time,
+ * and if the deadline really passes it still reports the failure with the
+ * limit it actually waited.
+ */
+const HEALTH_TIMEOUT_MS = 30_000;
+const HEALTH_TIMEOUT_LOCAL_MS = 120_000;
+const HEALTH_POLL_MS = 300;
+/* ATO-157: `atag serve` answers its first /health well inside a second on a
+   switch's restart, so the first seconds are looked at three times as often:
+   a 300 ms step alone put up to 300 ms of nothing on every switch. */
+const HEALTH_POLL_FAST_MS = 100;
+const HEALTH_FAST_FOR_MS = 3_000;
+
+/**
+ * Stopping the agent: SIGTERM, a grace to close by itself, then SIGKILL.
+ *
+ * `atag serve` closes in well under a second when it is idle. It does not
+ * close at all while its scheduler waits on a task's turn: the runtime's
+ * shutdown awaits the tick in flight, and a turn parked on a provider outage
+ * holds that tick for up to five minutes. That is what backlog 41 caught on
+ * a Mac deep in swap: a switch to the cloud stopped the local model server
+ * under a recurring task's turn, the agent said "SIGTERM received, closing"
+ * and nothing after it, and four seconds later it was killed. No grace a
+ * person would sit through covers that case, and a longer one only makes
+ * every such switch slower, so the grace stays where it was. What changed is
+ * what the SIGKILL means: it is this client's own doing, and it is never
+ * reported as the agent failing (see childExited).
+ *
+ * After the SIGKILL the exit itself is waited for, bounded: the next agent
+ * is started once the old one has let go of its port and its databases.
+ */
+const STOP_GRACE_MS = 4_000;
+const KILL_WAIT_MS = 3_000;
+/**
+ * An agent still there after its SIGKILL is let go of (one stuck in the
+ * kernel, on a Mac deep in swap): this is how long the next start — or a
+ * later stop asked whether the agent is gone — waits for it, without
+ * blocking the main thread. It holds the databases while it is there.
+ */
+const LINGER_WAIT_MS = 5_000;
+
+/**
+ * Where the agent might be, in order of preference.
+ *
+ * `ATOMIC_AGENT_BIN` wins — that is how a driven test aims the app at a
+ * particular build.
+ *
+ * Then THE AGENT INSIDE THIS APP. A packaged build ships the matching
+ * agent in `Resources/agent`, and it is preferred over anything installed
+ * because it is the only one guaranteed to be the same version as the
+ * window drawing it. That is the bug it fixes: the coding-mode chip was
+ * greyed out and captioned with an internal route name because the agent
+ * the app happened to find — a released 0.5.5 install — has no
+ * `/api/coding-mode`. Shipping the pair together is the fix; the message
+ * about needing a newer agent is still there for a run that has no
+ * bundled agent to fall back on.
+ *
+ * After that, a locally built `~/atag-agent/bin/atag` (a developer
+ * checkout), then the released install. Nothing here repoints
+ * `~/.local/bin/atag`, so a terminal `atag` keeps running whatever was
+ * installed, and the diagnostics line names the binary actually started.
+ */
+export function bundledAgentPath(): string | null {
+  /* `process.resourcesPath` is only meaningful in a packaged app; in a dev
+     run it points into the Electron install, where there is no agent. Both
+     cases are handled by simply testing the path. */
+  const root = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (!root) return null;
+  return join(root, "agent", bundledAgentFileName(process.platform));
+}
+
+/* The list itself is platform.ts's agentBinaryCandidates, so the Windows
+   and Linux arms are under unit test; the override still wins, so a driven
+   run can aim the app at one build. */
+function candidateBinaries(): string[] {
+  const root = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  return agentBinaryCandidates({
+    platform: process.platform,
+    home: homedir(),
+    env: process.env,
+    resourcesPath: root,
+  });
+}
+
+export function resolveBinary(): string | null {
+  for (const candidate of candidateBinaries()) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const address = srv.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      srv.close(() => (port ? resolve(port) : reject(new Error("no port"))));
+    });
+  });
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** `4 s`, `0.3 s`: a wait as the log says it. */
+const seconds = (ms: number) => `${Number.isInteger(ms / 1000) ? ms / 1000 : (ms / 1000).toFixed(1)} s`;
+
+/* ------------------------------------------------------- orphan reaping ---
+   r6 (human-scenario round). `before-quit` stops the child, and that is the
+   only thing that ever did. Every OTHER way this app ends — Force Quit, a
+   crash in the main process, a SIGKILL from a test harness, the machine
+   running out of memory and the kernel picking Electron — leaves `atag serve`
+   alive, reparented to launchd, holding its port and a few hundred megabytes,
+   for ever. Nothing ever came back for it.
+
+   Driving found this the expensive way: 108 orphaned `atag serve` processes on
+   this Mac, the oldest four days old, together holding about 3.4 GB. The
+   machine was so far into swap that the wizard's own `atag config get` blew
+   its 30-second timeout and first-run died on "Command failed" — an app defect
+   presenting as a model-shaped failure two removes away. `npm run smoke` could
+   never see this: it asserts on one live app, and the damage is what is left
+   behind after that app is gone.
+
+   The fix that works without touching the agent: this app is the only writer
+   of its own state directory, so a `serve.json` in there names the child it
+   last started. The next launch reads it and, if that process is still alive
+   AND is still an `atag serve` on the port we recorded, kills it before
+   spawning its replacement. A live desktop app always has its own child, so
+   anything the file names at start time is by definition an orphan.
+
+   Scoped by state directory, which is what makes it safe with several lanes
+   (and the operator's own window) running at once: each has its own
+   directory, its own file, and reaps only what it itself left behind. */
+
+/** What this app last spawned, so the next launch can come back for it. */
+interface ServeRecord {
+  pid: number;
+  port: number;
+  startedAt: number;
+}
+
+function serveRecordPath(): string {
+  return join(DESKTOP_STATE_DIR, "serve.json");
+}
+
+/** The command line of a live pid, or null if it is not running. */
+export function commandOf(pid: number): string | null {
+  try {
+    // The command line is the one thing that answers "is this the same
+    // process, or a pid that got reused since we wrote it down". macOS asks
+    // `ps -o command= -p`; Linux reads /proc; Windows asks CIM.
+    const probe = commandLineProbe(process.platform, pid, process.env.SystemRoot);
+    if (probe.kind === "procfs") return procCmdline(readFileSync(probe.file, "utf8")).trim() || null;
+    return execFileSync(probe.command, probe.args, {
+      encoding: "utf8",
+      timeout: process.platform === "win32" ? 10_000 : 4000,
+      windowsHide: true,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when `pid` really is the `atag serve` we recorded on `port`. */
+function looksLikeOurServe(pid: number, port: number): boolean {
+  const cmd = commandOf(pid);
+  if (!cmd) return false;
+  return looksLikeServeCommand(cmd, port);
+}
+
+/** A short blocking pause. `/bin/sleep` on macOS, as it always was; there is
+    no such binary on Windows, so everywhere else it is Atomics.wait. */
+function sleepSync(ms: number): void {
+  if (process.platform === "darwin") {
+    execFileSync("/bin/sleep", [String(ms / 1000)]);
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Windows (ATO-177): the stand-in for the app that `atag serve` watches, so
+ * ending it asks the agent to close by itself (platform.ts serveWatchArgs).
+ * This app's own executable run as Node: no other binary to ship or find. Its
+ * stdin is a pipe from the app, so it ends with the app however the app ends.
+ * Null when it could not be started; the agent then watches the app itself, as
+ * before, and a stop is the tree kill alone.
+ */
+function spawnWatchSentinel(): ChildProcess | null {
+  try {
+    const sentinel = spawn(process.execPath, ["-e", WATCH_SENTINEL_SOURCE], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["pipe", "ignore", "ignore"],
+      windowsHide: true,
+    });
+    sentinel.on("error", () => {});
+    sentinel.stdin?.on("error", () => {});
+    return sentinel.pid ? sentinel : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Windows: end `pid` and everything it started (see platform.ts stopPlan). */
+function taskkillTree(pid: number): Promise<void> {
+  const plan = stopPlan("win32", pid, process.env.SystemRoot);
+  if (plan.kind !== "taskkill") return Promise.resolve();
+  return new Promise((resolve) => {
+    execFile(plan.command, plan.args, { timeout: 10_000, windowsHide: true }, () => resolve());
+  });
+}
+
+/**
+ * Kill whatever the last run of this app left behind in this state dir.
+ * Returns what it reaped, so the caller can say so in the log.
+ *
+ * Backlog 41: it can only ever find a child of THIS run if one was let go of
+ * without its record being cleared, and the one thing that did that — the
+ * old child's exit handler clearing the record of the child started after it
+ * — is gone (childExited only acts for the child it was registered on, and
+ * only ever clears the record that names that child's pid). The other one is
+ * a child a stop let go of when it was still there after its SIGKILL: its
+ * record is kept for the next launch, and `own` names it so this run leaves
+ * it alone — it is not an orphan of a previous run, it has had its SIGKILL
+ * already, and the blocking wait below would freeze the window for nothing.
+ * `path` is the record of one AgentClient: the app's own, or a smoke check's.
+ */
+export function reapOrphanedServe(
+  path: string = serveRecordPath(),
+  own: ReadonlySet<number> = new Set(),
+): { pid: number; killed: boolean } | null {
+  let rec: ServeRecord;
+  try {
+    rec = JSON.parse(readFileSync(path, "utf8")) as ServeRecord;
+  } catch {
+    return null; // no record, unreadable, or not JSON — nothing to reap
+  }
+  if (!rec || typeof rec.pid !== "number" || typeof rec.port !== "number") {
+    forgetServeRecord(path);
+    return null;
+  }
+  if (own.has(rec.pid)) return null;
+  if (!looksLikeOurServe(rec.pid, rec.port)) {
+    // Gone already, or the pid belongs to something else now. Either way the
+    // record is stale, and killing a stranger's pid is the one thing this
+    // must never do.
+    forgetServeRecord(path);
+    return null;
+  }
+  let killed = false;
+  try {
+    if (process.platform === "win32") {
+      // No signals: end the orphan and its tree in one step. Blocking for
+      // the same reason as below — two agents on one state directory.
+      const plan = stopPlan("win32", rec.pid, process.env.SystemRoot);
+      if (plan.kind === "taskkill") {
+        execFileSync(plan.command, plan.args, { timeout: 10_000, windowsHide: true, stdio: "ignore" });
+      }
+      killed = true;
+    } else {
+      process.kill(rec.pid, "SIGTERM");
+      // Give it a moment to close its sqlite handles, then insist. This is a
+      // blocking wait on purpose: it runs before the replacement is spawned,
+      // and two agents on one state directory is worse than a slow launch.
+      const until = Date.now() + 3000;
+      while (Date.now() < until && looksLikeOurServe(rec.pid, rec.port)) {
+        sleepSync(100);
+      }
+      if (looksLikeOurServe(rec.pid, rec.port)) process.kill(rec.pid, "SIGKILL");
+      killed = true;
+    }
+  } catch {
+    /* it exited between the check and the signal — the good outcome */
+  }
+  forgetServeRecord(path);
+  return { pid: rec.pid, killed };
+}
+
+function rememberServeRecord(path: string, pid: number, port: number): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const rec: ServeRecord = { pid, port, startedAt: Date.now() };
+    writeFileSync(path, JSON.stringify(rec), { mode: 0o600 });
+  } catch {
+    /* an unwritable state dir is already reported elsewhere; never block a
+       launch on the bookkeeping file */
+  }
+}
+
+/**
+ * Clear the record. With `pid`, only when it names that pid: a child's exit
+ * clears its own record and never its successor's (backlog 41).
+ */
+function forgetServeRecord(path: string, pid?: number): void {
+  try {
+    if (pid !== undefined) {
+      const rec = JSON.parse(readFileSync(path, "utf8")) as Partial<ServeRecord> | null;
+      if (!rec || rec.pid !== pid) return;
+    }
+    unlinkSync(path);
+  } catch {
+    /* already gone, or not ours to clear */
+  }
+}
+
+/** Resolves once `child` has exited — at once when it already has. */
+function exitOf(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => child.once("exit", () => resolve()));
+}
+
+/** Whether `p` settles within `ms`. */
+async function settlesWithin(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), ms); });
+  try {
+    return await Promise.race([p.then(() => true, () => true), late]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Stand-ins for a smoke check (t41): a second AgentClient in the smoke app
+ * runs a stand-in agent on a record file of its own, so the app's own agent
+ * and its record are never touched. Every field defaults to the real thing.
+ */
+export interface AgentClientOptions {
+  /** The binary started as `atag serve` (default: resolveBinary). */
+  binary?: () => string | null;
+  /** The record the next launch's reaper reads (default: `<state dir>/serve.json`). */
+  serveRecordPath?: string;
+  /** How long a fresh agent gets to answer /health (default: by route, healthBudgetMs). */
+  healthBudgetMs?: number;
+  /** SIGTERM → SIGKILL (default STOP_GRACE_MS). */
+  stopGraceMs?: number;
+  /** SIGKILL → let go of an agent still there (default KILL_WAIT_MS). */
+  killWaitMs?: number;
+  /** Windows: the stand-in ended → the tree kill, for an agent that has not closed (default WINDOWS_GRACEFUL_MS). */
+  windowsGraceMs?: number;
+  /** How long a start waits for an agent a stop let go of (default LINGER_WAIT_MS). */
+  lingerWaitMs?: number;
+  /**
+   * How a signal reaches the agent (default `child.kill`). A check stands in
+   * a SIGKILL that does not take, as for an agent stuck in the kernel.
+   */
+  signal?: (child: ChildProcess, signal: NodeJS.Signals) => void;
+}
+
+/** How a fresh agent's wait for /health ended. */
+type HealthVerdict =
+  | "healthy"
+  /** The budget ran out with the agent still running: the one case that is "did not become healthy". */
+  | "timeout"
+  /** It exited on its own while booting; childExited has said how. */
+  | "exited"
+  /** A stop ended it, or ended the start before anything was spawned: a restart, not a failure. */
+  | "superseded";
+
+export class AgentClient extends EventEmitter {
+  private child: ChildProcess | null = null;
+  private port: number | null = null;
+  private token = "";
+  private events: AbortController | null = null;
+  private turns = new Map<string, AbortController>();
+  /** turnId → the agent's `X-Atomic-Completion-Id`, once the stream opens. */
+  private completions = new Map<string, string>();
+  /** Set by stop(), cleared as the next start begins: the turns stop() drops end no `idle`. */
+  private stopping = false;
+
+  /* ---- backlog 41: whose exit is it? ----
+     A restart is stop() then start(). stop() sent SIGTERM, gave the agent 4 s,
+     sent SIGKILL and returned without waiting for the exit; start() cleared
+     the one `stopping` flag and spawned the next agent. The OLD agent's exit
+     then landed on the client as if it were the new one's: the window read
+     "The agent exited (code null, signal SIGKILL)." for a kill this client
+     had made itself; the handler took the NEW child out of `child`, cleared
+     its serve.json and aborted its approval stream; and the health wait,
+     finding `child` empty, reported "did not become healthy within 30s" a
+     second or two in. The new agent went on serving — the port and token
+     still pointed at it — untracked: no stop ever reached it, and with its
+     record gone no later launch reaped it either. So each child's exit now
+     speaks only for that child, a stop marks the children it ends, the start
+     and the stop are one at a time each, and a stop also ends a start on its
+     way. */
+  /** The start on its way: a second caller shares it. */
+  private starting: Promise<AgentStatus> | null = null;
+  /** The stop on its way: a second caller shares it, and a start waits for it. */
+  private stopInFlight: Promise<boolean> | null = null;
+  /** Moves at every stop: a start that began before it gives up at its next look. */
+  private stopEpoch = 0;
+  /**
+   * Moves at every stop() call, one that joins the stop on its way too. A
+   * start waiting behind a stop gives way to a stop asked for while it
+   * waited: it spawns nothing, and the stop's caller starts what it wants.
+   */
+  private stopRequests = 0;
+  /** Set by close(): the app is quitting, and no start spawns an agent again. */
+  private closed = false;
+  /** The children a stop has ended or is ending: their exit is that stop's doing, never a crash. */
+  private readonly stopped = new WeakSet<ChildProcess>();
+  /**
+   * Children a stop let go of while they were still there after their
+   * SIGKILL. Each leaves the set when its exit comes at last. The next start
+   * waits for them (bounded, without blocking) and never reaps them as
+   * orphans of a previous run; a stop does not call the agent gone while
+   * one is still there.
+   */
+  private readonly lingering = new Set<ChildProcess>();
+  /** Windows (ATO-177): each agent's stand-in for the app, the process it watches (spawnWatchSentinel). */
+  private readonly sentinels = new Map<ChildProcess, ChildProcess>();
+  private readonly opts: AgentClientOptions;
+  private readonly recordPath: string;
+
+  status: AgentStatus = {
+    state: "stopped",
+    binary: null,
+    port: null,
+    workingDir: process.env.HOME ?? homedir(),
+    llama: null,
+    error: null,
+  };
+
+  constructor(workingDir: string, opts: AgentClientOptions = {}) {
+    super();
+    this.status.workingDir = workingDir;
+    this.opts = opts;
+    this.recordPath = opts.serveRecordPath ?? serveRecordPath();
+  }
+
+  /** The pid of the agent this client runs, or null (diagnostics and the T41 smoke). */
+  get pid(): number | null {
+    return this.child?.pid ?? null;
+  }
+
+  /**
+   * The turns streaming from this agent right now, in every chat. A switch
+   * does not restart the agent under one (backend-switch restartAfterSwitch);
+   * `idle` is emitted when the last of them ends on its own.
+   */
+  get turnsInFlight(): number {
+    return this.turns.size;
+  }
+
+  private setStatus(patch: Partial<AgentStatus>): void {
+    this.status = { ...this.status, ...patch };
+    this.emit("status", this.status);
+  }
+
+  private base(): string {
+    if (!this.port) throw new Error("agent is not running");
+    return `http://127.0.0.1:${this.port}`;
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      authorization: `Bearer ${this.token}`,
+      "content-type": "application/json",
+    };
+  }
+
+  /** A line of the desktop's own about the agent: the Diagnostics pane and agent.log, and the terminal the app was started from. */
+  private say(line: string): void {
+    // ATO-121: tagged by what it says (agent-output lineLevel), not ERR for being on stderr.
+    const level = lineLevel(line);
+    this.emit("log", { stream: "stderr", line, ...(level ? { level } : {}) });
+    console.error(line);
+  }
+
+  /**
+   * Start `atag serve`, unless it is running or starting already — a second
+   * caller gets the start on its way. A start asked for while a stop runs
+   * waits for that stop first, so it never joins a start the stop is ending.
+   * When another stop was asked for while it waited, it gives way and spawns
+   * nothing: whoever asked for that stop starts what it wants after it. And
+   * once the client is closed (the quit), no start spawns anything: Cmd+Q
+   * during a restart, a workspace change or an import joined the stop on its
+   * way, and the start that came after that stop brought `atag serve` up
+   * behind the quitting app.
+   */
+  async start(): Promise<AgentStatus> {
+    const asked = this.stopRequests;
+    while (this.stopInFlight) await this.stopInFlight;
+    if (this.closed || this.stopRequests !== asked) return this.status;
+    if (this.starting) return this.starting;
+    if (this.child) return this.status;
+    const run = this.spawnAndWait().finally(() => {
+      if (this.starting === run) this.starting = null;
+    });
+    this.starting = run;
+    return run;
+  }
+
+  private async spawnAndWait(): Promise<AgentStatus> {
+    const binary = (this.opts.binary ?? resolveBinary)();
+    if (!binary) {
+      this.setStatus({
+        state: "missing-binary",
+        binary: null,
+        error: installHint(process.platform),
+      });
+      return this.status;
+    }
+
+    // A stop from here on ends this start: it spawns nothing, or its child is the stop's to end.
+    const epoch = this.stopEpoch;
+    const superseded = () => this.stopEpoch !== epoch;
+    /* Ended by a stop: a restart, not a failure. It answers "stopped", never
+       the status an earlier agent left (agent:restart hands this answer to
+       the window, which would report that agent's error again). */
+    const gaveWay = (): AgentStatus => {
+      this.port = null;
+      this.setStatus({ state: "stopped", port: null, llama: null, error: null });
+      return this.status;
+    };
+    this.stopping = false;
+    /* An agent the last stop let go of, still there after its SIGKILL, holds
+       the port it had and the databases: wait for it to go, without blocking
+       the window. One that outlasts the wait is said, and the next agent
+       starts beside it. */
+    if (!(await this.lingeringGone())) {
+      const pids = [...this.lingering].map((c) => c.pid ?? "?").join(", ");
+      this.say(`[desktop] the agent a stop let go of (pid ${pids}) has still not exited — starting the next one beside it`);
+    }
+    if (superseded()) return gaveWay();
+    /* r6: before anything else, come back for the child the LAST run left
+       behind. A live desktop app always holds its own child, so whatever
+       serve.json still names at this moment outlived its parent — Force Quit,
+       a crash, a SIGKILL — and would otherwise sit there for ever. A child
+       this client let go of is not that, and is left alone (reapOrphanedServe). */
+    const own = new Set([...this.lingering].map((c) => c.pid).filter((pid): pid is number => pid !== undefined));
+    const orphan = reapOrphanedServe(this.recordPath, own);
+    if (orphan) {
+      // Both places a person might look: the Diagnostics pane, and the
+      // terminal when the app was started from one.
+      this.say(`[desktop] reaped an orphaned agent left by a previous run (pid ${orphan.pid})`);
+      // Analytics: the last session did not end cleanly (app_opened.prev_session_crashed).
+      this.emit("orphan-reaped");
+    }
+    const token = randomBytes(24).toString("hex");
+    const port = await freePort();
+    // Backlog 41: a stop came while the port was found. Nothing was spawned, and there is nothing to say.
+    if (superseded()) return gaveWay();
+    this.token = token;
+    this.port = port;
+    this.setStatus({ state: "starting", binary, port, error: null });
+    /* A "status" listener runs inside that call, and one that stopped the
+       client has already looked for a child to end and found none: nothing
+       is spawned behind its back. */
+    if (superseded()) return gaveWay();
+
+    // ATO-177: on Windows the agent watches a stand-in for the app, whose end asks it to close.
+    const sentinel = process.platform === "win32" ? spawnWatchSentinel() : null;
+    let child: ChildProcess;
+    try {
+      child = spawn(
+        binary,
+        [
+          "serve",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          String(port),
+          "--api-key",
+          token,
+          ...serveWatchArgs(process.platform, sentinel?.pid),
+        ],
+        {
+          cwd: this.status.workingDir,
+          // r5 item 9: `atag serve` runs on the desktop's own state directory.
+          env: agentEnv(),
+          stdio: ["ignore", "pipe", "pipe"],
+          // Windows: a console child of a GUI app otherwise opens a console window.
+          windowsHide: true,
+        },
+      );
+    } catch (err) {
+      // Nothing was started for the stand-in to stand in for.
+      sentinel?.kill();
+      throw err;
+    }
+    this.child = child;
+    if (sentinel) this.sentinels.set(child, sentinel);
+
+    /* Whole lines, however the pipe cut them, each with its level when it is
+       one of the agent's structured log lines, or a line whose shape says it
+       (serve's own `[atomic-agent] …` lifecycle lines, ATO-121; agent-output.ts).
+       What is left when a stream closes is let out too: an agent that died
+       mid-line. */
+    const relay = (stream: "stdout" | "stderr", from: Readable | null) => {
+      if (!from) return;
+      const lines = new LineSplitter((line) => {
+        if (!line.trim()) return;
+        const level = lineLevel(line);
+        this.emit("log", { stream, line, ...(level ? { level } : {}) });
+      });
+      from.on("data", (chunk: Buffer) => lines.push(chunk));
+      from.on("close", () => lines.end());
+    };
+    relay("stdout", child.stdout);
+    relay("stderr", child.stderr);
+    /* r6: write down who we just started, so the next launch can clean up
+       after this one however this one ends. */
+    if (child.pid) rememberServeRecord(this.recordPath, child.pid, port);
+
+    // Backlog 41: registered per child, and acting only for the child it was registered on.
+    child.on("exit", (code, signal) => {
+      // A child a stop let go of is gone at last: nothing waits for it any more, and its record goes.
+      if (this.lingering.delete(child) && child.pid !== undefined) forgetServeRecord(this.recordPath, child.pid);
+      this.endSentinel(child);
+      this.childExited(child, code, signal);
+    });
+    /* A child that could not be spawned at all (not executable, say) emits
+       `error` and has no pid. Unheard, that event is an uncaught exception in
+       main. A failed kill emits `error` too, on a child that has a pid: that
+       one says nothing about how the agent is doing, and its exit still comes. */
+    child.on("error", (err) => {
+      if (child.pid === undefined) {
+        this.endSentinel(child);
+        this.childFailedToSpawn(child, err);
+      }
+    });
+
+    const budget = this.opts.healthBudgetMs ?? this.healthBudgetMs();
+    const verdict = await this.waitForHealth(child, port, budget, superseded);
+    if (verdict === "healthy") this.openApprovalStream(child);
+    /* Backlog 41: "did not become healthy" is said only when the budget really
+       ran out with this agent still running. An agent that exited while it
+       booted has already said how (childExited); one a stop ended is a
+       restart, not a failure. */
+    else if (verdict === "timeout") {
+      // Analytics: a start that really ran out of time, never a stop or a superseded start.
+      this.emit("start-failed", { reason: "health_timeout", exitCode: null, signal: null });
+      this.setStatus({
+        state: "error",
+        error: `The agent did not become healthy within ${Math.round(budget / 1000)}s.`,
+      });
+    } else if (verdict === "superseded") return gaveWay();
+    return this.status;
+  }
+
+  /**
+   * One child's exit. Only the child this client still tracks speaks for
+   * itself: one that a stop has already let go of, or that is no longer the
+   * client's child at all, ended as it was asked to, and the record, the
+   * approval stream and the status now belong to the agent after it.
+   */
+  private childExited(child: ChildProcess, code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.child !== child) return;
+    this.child = null;
+    this.port = null;
+    forgetServeRecord(this.recordPath, child.pid);
+    this.events?.abort();
+    this.events = null;
+    // Ended by a stop — SIGTERM, or SIGKILL after the grace: that is a stop, whichever signal ended it.
+    if (this.stopped.has(child)) {
+      this.setStatus({ state: "stopped", port: null, llama: null });
+      return;
+    }
+    // Analytics / error reporting: numbers and a signal name only, never the agent's output.
+    this.emit("unexpected-exit", { exitCode: code, signal, phase: this.status.state === "starting" ? "starting" : "running" });
+    this.setStatus({
+      state: "error",
+      port: null,
+      llama: null,
+      error: `The agent exited (code ${code ?? "null"}, signal ${signal ?? "none"}).`,
+    });
+  }
+
+  private childFailedToSpawn(child: ChildProcess, err: Error): void {
+    if (this.child !== child) return;
+    this.child = null;
+    this.port = null;
+    this.setStatus({
+      state: "error",
+      port: null,
+      llama: null,
+      error: `The agent could not be started: ${err.message}`,
+    });
+  }
+
+  /**
+   * The local route boots the agent AND loads a model; give it the longer
+   * budget. Read from the config file rather than from any in-memory
+   * state, because this runs before the first /health answer — the file is
+   * the only thing that knows the route at this moment.
+   */
+  private healthBudgetMs(): number {
+    try {
+      const raw = readFileSync(join(DESKTOP_STATE_DIR, "config.json"), "utf8");
+      const cfg = JSON.parse(raw) as { llm?: { activeTextProvider?: unknown } };
+      const active = cfg.llm?.activeTextProvider;
+      // An absent block means the runtime synthesizes local-llama, so the
+      // undefined case is a local boot too.
+      if (active === undefined || active === "local-llama") return HEALTH_TIMEOUT_LOCAL_MS;
+    } catch {
+      /* unreadable or not written yet — the cloud budget is the safe floor */
+    }
+    return HEALTH_TIMEOUT_MS;
+  }
+
+  /**
+   * Wait for THIS child to answer /health on its own port. Backlog 41: it used
+   * to read the client's `child` and `port`, which a stop and the start after
+   * it change under it — an empty `child` read as a failed boot, and a wait
+   * left over from a stopped start would have taken the next agent's answer
+   * for its own.
+   */
+  private async waitForHealth(
+    child: ChildProcess,
+    port: number,
+    budgetMs: number,
+    superseded: () => boolean,
+  ): Promise<HealthVerdict> {
+    const ended = (): HealthVerdict | null => {
+      if (superseded() || this.stopped.has(child)) return "superseded";
+      return this.child === child ? null : "exited";
+    };
+    const began = Date.now();
+    const deadline = began + budgetMs;
+    while (Date.now() < deadline) {
+      const gone = ended();
+      if (gone) return gone;
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/health`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (res.ok) {
+          const body = (await res.json()) as {
+            workingDir?: string;
+            llama?: { url: string; reachable: boolean };
+          };
+          // A stop may have come while it answered.
+          const goneMeanwhile = ended();
+          if (goneMeanwhile) return goneMeanwhile;
+          this.setStatus({
+            state: "connected",
+            error: null,
+            llama: body.llama ?? null,
+            workingDir: body.workingDir ?? this.status.workingDir,
+          });
+          return "healthy";
+        }
+        void res.body?.cancel().catch(() => undefined);
+      } catch {
+        /* not up yet */
+      }
+      await sleep(Date.now() - began < HEALTH_FAST_FOR_MS ? HEALTH_POLL_FAST_MS : HEALTH_POLL_MS);
+    }
+    return ended() ?? "timeout";
+  }
+
+  /**
+   * B01 review: a window that loads (a new one after the last was closed, a
+   * reload, a renderer that crashed) has no card for a request raised before
+   * it. The agent replays what is still pending only when the stream
+   * connects, and since the agent keeps the stream alive (`: keepalive`) it
+   * no longer drops and reconnects every 300 s, so the new window would wait
+   * for a card that never comes while the turn waits for an answer. Opening
+   * the stream again asks for that replay. False when no agent is up with a
+   * stream open (it opens one itself once healthy).
+   */
+  reopenApprovalStream(): boolean {
+    const child = this.child;
+    if (!child || !this.events || this.events.signal.aborted || this.stopping) return false;
+    this.openApprovalStream(child);
+    return true;
+  }
+
+  /** SSE stream of approval requests, reconnected while this child lives. */
+  private openApprovalStream(child: ChildProcess): void {
+    this.events?.abort();
+    const controller = new AbortController();
+    this.events = controller;
+
+    void (async () => {
+      while (!controller.signal.aborted && this.child === child) {
+        try {
+          const res = await fetch(`${this.base()}/api/events`, {
+            headers: { authorization: `Bearer ${this.token}` },
+            signal: controller.signal,
+          });
+          if (!res.body) throw new Error("no body");
+          for await (const frame of sseFrames(res.body, controller.signal)) {
+            if (frame.data === "[DONE]") continue;
+            try {
+              this.emit("approval", JSON.parse(frame.data));
+            } catch {
+              /* ignore malformed frame */
+            }
+          }
+        } catch {
+          if (controller.signal.aborted) return;
+          await sleep(1000);
+        }
+      }
+    })();
+  }
+
+  private async json<T>(path: string): Promise<T> {
+    const res = await fetch(`${this.base()}${path}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`${path} → HTTP ${res.status}`);
+    return (await res.json()) as T;
+  }
+
+  capabilities = () => this.json<unknown>("/api/capabilities");
+  config = () => this.json<unknown>("/api/config");
+  skills = () => this.json<unknown>("/api/skills");
+  // Item 7 (settings surface): the TUI lists with DEFAULT_LIST_LIMIT = 200
+  // (tasks-orchestrator.ts:25); route-tasks.ts defaults to 50 and caps at 500.
+  // Review fix (item 6): the sidebar's Tasks list is EVERY task, not the rail's
+  // running/pending/recurring projection, so it has to ask for the route's
+  // whole ceiling — at 200 the oldest executed tasks the user's dot rules are
+  // about were dropped by the server before "Load more" could ever reach them.
+  tasks = () => this.tasksList(500);
+  tasksList = (limit: number) => this.json<unknown>(`/api/tasks?limit=${encodeURIComponent(String(limit))}`);
+  // Review fix (item 6): without a limit route-sessions.ts serves 25 rows, so
+  // the Chats list was truncated by the server one "Load more" in and an older
+  // chat could not be reached — or pinned — at all. 200 is the route's cap and
+  // the TUI's own scan window (chat-orchestrator.ts RAIL_SCAN_LIMIT).
+  sessions = () => this.json<unknown>("/api/sessions?limit=200");
+  models = () => this.json<unknown>("/v1/models");
+  session = (id: string) => this.json<unknown>(`/api/sessions/${encodeURIComponent(id)}`);
+  /** `DELETE /api/sessions/{id}` — purge one session row (idempotent on 0.5.4). Harness-only today: the smoke removes the task fixtures' empty sessions. */
+  deleteSession = (id: string) => this.request<unknown>("DELETE", `/api/sessions/${encodeURIComponent(id)}`);
+
+  // Item 7 (settings surface): the task routes the Tasks tab acts on and
+  // /health for the diagnostics line. `request` is the writing sibling
+  // of `json`; a non-2xx answer carries the agent's own error text.
+  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = 15_000): Promise<T> {
+    const res = await fetch(`${this.base()}${path}`, {
+      method,
+      headers: this.headers(),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const parsed = JSON.parse(text) as { error?: { message?: string } };
+        detail = parsed.error?.message ?? "";
+      } catch {
+        /* not JSON */
+      }
+      throw new Error(detail || `${path} → HTTP ${res.status}`);
+    }
+    return (text ? JSON.parse(text) : null) as T;
+  }
+  /* Item 7C — mid-turn steering. `POST /api/sessions/{id}/steer` folds a
+     message into the turn already running; the loop drains the inbox at
+     step boundaries. 200 `{steered,sessionId}`, 409 "no turn accepting
+     steers", 429 inbox full. Its answer is the ONLY fact the caller
+     consults — verified live against the installed 0.5.5.
+
+     `request` already unwraps `error.message` from a non-2xx body, so the
+     agent's own 409/429 sentences reach the caller intact; the renderer
+     translates them rather than printing them, because "send the message
+     with POST /v1/chat/completions instead" is advice for an API client,
+     not for someone typing in a chat window. */
+  steer = (sessionId: string, text: string) =>
+    this.request<{ steered: boolean; sessionId: string }>(
+      "POST",
+      `/api/sessions/${encodeURIComponent(sessionId)}/steer`,
+      { text },
+    );
+  /** What a turn accepted but never delivered — the loss-recovery half. */
+  undeliveredSteers = (sessionId: string) =>
+    this.json<{
+      sessionId: string;
+      undelivered: Array<{ seq: number; text: string; parkedAt: number }>;
+      discarded: number;
+    }>(`/api/sessions/${encodeURIComponent(sessionId)}/steer`);
+  /** Mandatory partner of the GET: without it the parked store accumulates. */
+  ackSteers = (sessionId: string, through: number, discarded: number) =>
+    this.request<{ acked: number; remaining: number; discardsAcked: number; discarded: number }>(
+      "DELETE",
+      `/api/sessions/${encodeURIComponent(sessionId)}/steer?through=${encodeURIComponent(
+        String(through),
+      )}&discarded=${encodeURIComponent(String(discarded))}`,
+    );
+
+  task = (id: string) => this.json<unknown>(`/api/tasks/${encodeURIComponent(id)}`);
+  cancelTask = (id: string) => this.request<unknown>("DELETE", `/api/tasks/${encodeURIComponent(id)}`);
+  /** Runs one attempt synchronously — an agent turn — so it waits longer than a read. */
+  runTask = (id: string) =>
+    this.request<unknown>("POST", `/api/tasks/${encodeURIComponent(id)}/run`, undefined, 180_000);
+  health = () => this.json<unknown>("/health");
+  /** ATO-134: /health without its llama probe (agent `?llama=0`; an older one ignores it and probes) — for busyTurns before a switch. */
+  turnsHealth = () => this.json<unknown>("/health?llama=0");
+  /**
+   * `PATCH /api/config` — on 0.6.6+ a deep merge into the user file that
+   * the running agent re-reads at once (no restart). Older agents answer
+   * the same route with a shallow merge that drops every block it does not
+   * know, so callers go through `agent-live.ts`, which checks first.
+   */
+  patchConfig = (patch: Record<string, unknown>) =>
+    this.request<{ path: string; config: unknown }>("PATCH", "/api/config", patch);
+  /** `POST /api/mcp/servers/{name}/{restart|enable|disable}` (0.6.6+): acts live, answers the server's status. */
+  mcpServer = (name: string, op: "restart" | "enable" | "disable") =>
+    this.request<{ server: unknown }>(
+      "POST",
+      `/api/mcp/servers/${encodeURIComponent(name)}/${op}`,
+      undefined,
+      60_000,
+    );
+  // Item 7 part B (Skills tab): GET /api/skills/{name} (manifest + SKILL.md
+  // body; 404 for a disabled skill — the registry's filtered view) and
+  // POST /api/skills/uninstall, which also runs runtime.refreshSkills().
+  skill = (name: string) => this.json<unknown>(`/api/skills/${encodeURIComponent(name)}`);
+  uninstallSkill = (name: string, source: "global" | "project" = "global") =>
+    this.request<unknown>("POST", "/api/skills/uninstall", { name, source });
+
+  /**
+   * The composer's coding mode, applied live on the runtime by
+   * /api/coding-mode exactly as the TUI does — no config write, no
+   * restart. Older agents have no such route; a 404 is reported as
+   * unsupported so the chip can say why it is off.
+   */
+  async codingMode(mode?: string): Promise<{
+    ok: boolean; supported: boolean; mode?: string; approvalLevel?: number;
+    planMode?: boolean; baseLevel?: number; error?: string;
+    // The route returns its own copy of the mode's label/detail/tone/summary.
+    // The renderer prefers it over its local table so the two cannot drift,
+    // so it is declared rather than left to ride along on the body spread —
+    // an undeclared field is a field tsc cannot protect.
+    look?: { label: string; detail: string; tone: string; summary: string };
+  }> {
+    try {
+      const res = await fetch(`${this.base()}/api/coding-mode`, {
+        method: mode === undefined ? "GET" : "POST",
+        headers: this.headers(),
+        ...(mode === undefined ? {} : { body: JSON.stringify({ mode }) }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status === 404) return { ok: false, supported: false, error: "this agent has no coding-mode route" };
+      if (!res.ok) return { ok: false, supported: true, error: `HTTP ${res.status}` };
+      const body = (await res.json()) as {
+        mode: string; approvalLevel: number; planMode: boolean; baseLevel: number;
+        look?: { label: string; detail: string; tone: string; summary: string };
+      };
+      return { ok: true, supported: true, ...body };
+    } catch (err) {
+      return { ok: false, supported: true, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // --- Lane B — context before the first message (item 3) ---
+
+  /**
+   * llama-server's `/props`, read for its physical context window
+   * (`default_generation_settings.n_ctx`, then `n_ctx`) exactly as the
+   * TUI's health poller does (src/tui/llm-health/llm-health-poller.ts
+   * extractContextWindow), with the same bearer auth. Runs here because
+   * the renderer's CSP is connect-src 'none'. Any failure is "no window
+   * from /props" — the caller falls through, as the poller swallows it.
+   * `slots` (0.6.7 item 38) is `total_slots`, the requests the server runs
+   * at once (`--parallel`): with one, a chat's turn waits while another
+   * chat's runs, and the window says so. Null when the server does not say.
+   */
+  async llamaProps(url: string, apiKey?: string): Promise<{ ok: boolean; n_ctx: number | null; model?: string | null; slots?: number | null; error?: string }> {
+    if (!/^https?:\/\//.test(url)) return { ok: false, n_ctx: null, model: null, error: "not an http url" };
+    // The renderer's key, when its config carries one; otherwise the env key,
+    // or the managed daemon's own key when `url` is its address (#582) —
+    // without it a keyed daemon answers 401 and the window falls back to a guess.
+    const key = apiKey || localLlamaKeyFor(url) || undefined;
+    try {
+      const res = await fetch(`${url.replace(/\/$/, "")}/props`, {
+        headers: { accept: "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!res.ok) return { ok: false, n_ctx: null, model: null, error: `HTTP ${res.status}` };
+      const json = (await res.json()) as Record<string, unknown>;
+      const settings = json["default_generation_settings"] as Record<string, unknown> | undefined;
+      const model = extractLlamaModelLabel(json, settings);
+      const total = json["total_slots"];
+      const slots = typeof total === "number" && Number.isInteger(total) && total > 0 ? total : null;
+      for (const candidate of [settings?.["n_ctx"], json["n_ctx"]]) {
+        if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) return { ok: true, n_ctx: candidate, model, slots };
+      }
+      return { ok: true, n_ctx: null, model, slots };
+    } catch (err) {
+      return { ok: false, n_ctx: null, model: null, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * The branch-only `POST /api/context-preview`: the runtime builds —
+   * never runs, never persists — the prompt the next turn would open
+   * with, so the readout before the first message is the agent's own
+   * breakdown. The installed 0.5.4 has no such route and answers the
+   * server's unknown-route 404 (`No route for POST …`), reported as
+   * `supported:false` so the renderer keeps to the trace projection; the
+   * route's own 404 for an unknown session is a different answer and is
+   * passed through as an error with the route still supported.
+   */
+  async contextPreview(sessionId: string | null, message: string): Promise<{
+    ok: boolean; supported: boolean; basis?: "built";
+    usage?: { tokens: number; contextWindow: number | null; conversationTokens: number; conversationPairs: number;
+      droppedPairs: number; conversationPairsCap: number; sections: Array<{ label: string; tokens: number }> };
+    contextWindow?: number | null; reservedForReply?: number; replyCap?: number; pairsCap?: number; error?: string;
+  }> {
+    try {
+      const res = await fetch(`${this.base()}/api/context-preview`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ ...(sessionId ? { session_id: sessionId } : {}), ...(message ? { message } : {}) }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status === 404) {
+        let detail = "";
+        try {
+          const body = (await res.json()) as { error?: { message?: string } };
+          detail = body?.error?.message ?? "";
+        } catch {
+          /* no body */
+        }
+        if (/session not found/i.test(detail)) return { ok: false, supported: true, error: detail };
+        return { ok: false, supported: false, error: "this agent has no context-preview route" };
+      }
+      if (!res.ok) return { ok: false, supported: true, error: `HTTP ${res.status}` };
+      const body = (await res.json()) as {
+        basis: "built"; usage: NonNullable<Awaited<ReturnType<AgentClient["contextPreview"]>>["usage"]>;
+        contextWindow: number | null; reservedForReply: number; replyCap?: number; pairsCap: number;
+      };
+      return { ok: true, supported: true, ...body };
+    } catch (err) {
+      return { ok: false, supported: true, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Run one turn. Deltas are emitted as `chat` events rather than
+   * returned, so the renderer can paint tokens as they arrive.
+   */
+  async chat(
+    turnId: string,
+    messages: Array<{ role: string; content: string }>,
+    sessionId?: string,
+  ): Promise<void> {
+    const controller = new AbortController();
+    this.turns.set(turnId, controller);
+    try {
+      const res = await fetch(`${this.base()}/v1/chat/completions`, {
+        method: "POST",
+        // Opt into atomic's named SSE frames (session_id, reasoning_progress,
+        // tool_progress). Without this header the stream is plain OpenAI
+        // chunks and the UI has no tool cards to draw.
+        headers: { ...this.headers(), "x-atomic-extensions": "1" },
+        // `session_id` continues the session the agent already holds, and is
+        // ALWAYS sent: without one the agent derives the id from the first
+        // message, and a new chat opened with an old chat's question would
+        // reopen the old chat (U27, see chat-session.ts).
+        body: JSON.stringify({
+          model: "atomic-agent",
+          stream: true,
+          messages,
+          session_id: chatSessionIdFor(sessionId),
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        const detail = res.ok ? "no response body" : `HTTP ${res.status}`;
+        this.emit("chat", { turnId, kind: "error", error: detail });
+        return;
+      }
+      const completionId = res.headers.get("x-atomic-completion-id");
+      if (completionId) this.completions.set(turnId, completionId);
+      for await (const frame of sseFrames(res.body, controller.signal)) {
+        if (frame.data === "[DONE]") break;
+        let chunk: {
+          choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
+          [key: string]: unknown;
+        };
+        try {
+          chunk = JSON.parse(frame.data);
+        } catch {
+          continue;
+        }
+        if (frame.event && frame.event !== "message") {
+          if (frame.event === "error") {
+            /* DRIFT FIX (D1). The agent's error frame is
+               `{error, category}`; forwarding it only under `payload`
+               left the renderer reading `ev.error === undefined` and
+               printing the bare sentence `turn failed: `. The fields are
+               lifted to the top level here — `payload` is kept so nothing
+               that already reads it breaks.
+
+               Deliberately still `kind: "error"`. emitStreamError is the
+               one emitter for step_error, loop_failed AND the terminal
+               turn error, and the wire carries nothing that tells them
+               apart; renaming it would silently stop
+               `ev.kind === 'error'` marking the session as needing
+               attention. */
+            this.emit("chat", {
+              turnId,
+              kind: "error",
+              error: typeof chunk.error === "string" ? chunk.error : "",
+              category: typeof chunk.category === "string" ? chunk.category : null,
+              payload: chunk,
+            });
+            continue;
+          }
+          this.emit("chat", { turnId, kind: frame.event, payload: chunk });
+          continue;
+        }
+        /* Item 7C — the steer-applied frame arrives UNNAMED (no `event:`
+           line), so it has to be matched on its body or it falls through
+           to the OpenAI-chunk path, where `choices[0]` is undefined and
+           it is dropped without trace. Verified live:
+           `data: {"object":"atomic.steer_applied","text":"…","step_index":1}`.
+
+           Like every extension frame (session_id, tool_progress, usage,
+           steer_undelivered, the named error), it exists only because the
+           request carries `x-atomic-extensions: 1` a few lines above. */
+        if (chunk.object === "atomic.steer_applied") {
+          this.emit("chat", {
+            turnId,
+            kind: "steer_applied",
+            text: typeof chunk.text === "string" ? chunk.text : "",
+            stepIndex: typeof chunk.step_index === "number" ? chunk.step_index : null,
+          });
+          continue;
+        }
+        const choice = chunk.choices?.[0];
+        if (choice?.delta?.content) {
+          this.emit("chat", { turnId, kind: "delta", text: choice.delta.content });
+        }
+        if (choice?.finish_reason) {
+          this.emit("chat", { turnId, kind: "finish", reason: choice.finish_reason });
+        }
+      }
+      this.emit("chat", { turnId, kind: "done" });
+    } catch (err) {
+      const aborted = controller.signal.aborted;
+      this.emit("chat", {
+        turnId,
+        kind: aborted ? "aborted" : "error",
+        error: aborted ? null : err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      const ended = this.turns.delete(turnId);
+      this.completions.delete(turnId);
+      /* The last turn has ended on its own (finished, failed, or stopped from
+         the window) — not by stop(), which drops them all and is a restart
+         already. A restart a switch held back for the turns runs now. */
+      if (ended && this.turns.size === 0 && !this.stopping) {
+        try {
+          this.emit("idle");
+        } catch {
+          /* a listener's failure is not this turn's */
+        }
+      }
+    }
+  }
+
+  /**
+   * Stop a turn. The agent is told to end it by id first, then the stream
+   * is dropped. Dropping the stream alone did not stop agents up to 0.6.3:
+   * they waited for the disconnect on the request, whose `close` Node had
+   * already emitted once the body was read, so the turn ran on — model
+   * generating, steers accepted — after the window said it had stopped.
+   * The cancel route is older than the desktop, so every agent has it.
+   */
+  cancel(turnId: string): boolean {
+    const controller = this.turns.get(turnId);
+    if (!controller) return false;
+    const completionId = this.completions.get(turnId);
+    if (completionId) void this.cancelCompletion(completionId);
+    controller.abort();
+    return true;
+  }
+
+  private async cancelCompletion(completionId: string): Promise<void> {
+    try {
+      const res = await fetch(
+        `${this.base()}/v1/chat/completions/${encodeURIComponent(completionId)}/cancel`,
+        { method: "POST", headers: this.headers(), signal: AbortSignal.timeout(5_000) },
+      );
+      // 404 means the turn had already ended — nothing left to stop.
+      await res.body?.cancel();
+    } catch {
+      // Agent gone or not answering: it has no turn to stop, and the
+      // dropped stream is all that is left to do.
+    }
+  }
+
+  async resolveApproval(
+    approvalId: string,
+    decision: "allow-once" | "deny",
+    reason?: string,
+  ): Promise<unknown> {
+    const res = await fetch(`${this.base()}/api/approval/resolve`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ approvalId, decision, ...(reason ? { reason } : {}) }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.json();
+  }
+
+  /**
+   * Stop `atag serve` and come back once it is gone, a start on its way
+   * included: that start spawns nothing more, and the child it spawned is
+   * ended here. One at a time: a second caller shares the stop on its way.
+   *
+   * Answers whether the agent is gone. False when one is still there after
+   * its SIGKILL: it still holds the databases, and an import must not
+   * replace them under it (tui-import).
+   */
+  stop(): Promise<boolean> {
+    this.stopRequests++;
+    if (this.stopInFlight) return this.stopInFlight;
+    const run = this.stopNow().finally(() => {
+      if (this.stopInFlight === run) this.stopInFlight = null;
+    });
+    this.stopInFlight = run;
+    return run;
+  }
+
+  /**
+   * The app is quitting: stop the agent, and from now on no start spawns
+   * one — not the restart, the workspace change or the import whose stop
+   * this joins, and not one asked for after it.
+   */
+  close(): Promise<boolean> {
+    this.closed = true;
+    return this.stop();
+  }
+
+  private async stopNow(): Promise<boolean> {
+    this.stopping = true;
+    this.stopEpoch++;
+    for (const controller of this.turns.values()) controller.abort();
+    this.turns.clear();
+    this.completions.clear();
+    this.events?.abort();
+    this.events = null;
+    const starting = this.starting;
+    const child = this.child;
+    const exited = child ? await this.endChild(child) : true;
+    // A start on its way gives up at its next look; the child it had spawned, if any, was `child`.
+    if (starting) await starting.catch(() => undefined);
+    this.port = null;
+    /* r6: a clean stop leaves nothing for the next launch to reap: the record
+       of the child it ended goes, and only that one. With no child, the
+       record is an orphan's from the last run, which the next start still has
+       to come back for. An agent still there after its SIGKILL keeps its
+       record until it exits (lingering). */
+    if (child && exited && child.pid !== undefined) forgetServeRecord(this.recordPath, child.pid);
+    if (this.status.state === "starting" || this.status.state === "connected") {
+      this.setStatus({ state: "stopped", port: null, llama: null });
+    }
+    return exited && (await this.lingeringGone());
+  }
+
+  /** Waits, bounded and without blocking, for the children a stop let go of; answers whether all of them are gone. */
+  private async lingeringGone(): Promise<boolean> {
+    if (this.lingering.size === 0) return true;
+    const exits = Promise.all([...this.lingering].map((child) => exitOf(child)));
+    return settlesWithin(exits, this.opts.lingerWaitMs ?? LINGER_WAIT_MS);
+  }
+
+  /** Windows (ATO-177): ends the stand-in `child` watches, which asks it to close; once is enough. */
+  private endSentinel(child: ChildProcess): boolean {
+    const sentinel = this.sentinels.get(child);
+    if (!sentinel) return false;
+    this.sentinels.delete(child);
+    try {
+      sentinel.stdin?.end();
+      sentinel.kill();
+    } catch {
+      // Gone already: the agent sees it gone just the same.
+    }
+    return true;
+  }
+
+  /** A signal to the agent, through the stand-in a check gave (AgentClientOptions.signal). */
+  private sendSignal(child: ChildProcess, sig: NodeJS.Signals): void {
+    if (this.opts.signal) this.opts.signal(child, sig);
+    else child.kill(sig);
+  }
+
+  /**
+   * End one child: SIGTERM (on Windows taskkill, which ends its tree), up to
+   * the grace for it to close by itself, then SIGKILL and a bounded wait for
+   * the exit. Whenever its exit comes it reads as stopped (childExited).
+   * Answers whether it exited; one still there after all that is let go of
+   * (lingering), so the next start can begin. stop() runs one at a time and
+   * a stopped child is no longer the client's, so no two calls end one child.
+   */
+  private async endChild(child: ChildProcess): Promise<boolean> {
+    this.stopped.add(child);
+    const exited = exitOf(child);
+    if (process.platform === "win32" && child.pid) {
+      /* ATO-177: no SIGTERM on Windows. The agent is asked first — its
+         stand-in for the app ends, and it closes by itself the way SIGTERM
+         closes it, its shutdown run — and only one still there after the
+         grace is ended with the processes it started. */
+      if (this.endSentinel(child)) {
+        const asked = this.opts.windowsGraceMs ?? WINDOWS_GRACEFUL_MS;
+        if (await settlesWithin(exited, asked)) return true;
+        this.say(`[desktop] the agent (pid ${child.pid}) did not close within ${seconds(asked)} of being asked — ending it and the processes it started`);
+      }
+      void taskkillTree(child.pid);
+    } else {
+      this.sendSignal(child, "SIGTERM");
+    }
+    const grace = this.opts.stopGraceMs ?? STOP_GRACE_MS;
+    if (await settlesWithin(exited, grace)) return true;
+    // Do not leave an orphan holding the port if SIGTERM is ignored.
+    const who = `the agent (pid ${child.pid ?? "?"})`;
+    this.say(`[desktop] ${who} did not close within ${seconds(grace)} of being stopped — ending it with SIGKILL`);
+    this.sendSignal(child, "SIGKILL");
+    const killWait = this.opts.killWaitMs ?? KILL_WAIT_MS;
+    if (await settlesWithin(exited, killWait)) return true;
+    this.say(`[desktop] ${who} was still there ${seconds(killWait)} after SIGKILL — going on without it`);
+    // Let go of it: its exit, whenever it comes, changes nothing but its own record and this set (childExited).
+    this.lingering.add(child);
+    if (this.child === child) {
+      this.child = null;
+      this.port = null;
+    }
+    return false;
+  }
+}
+
+/** Minimal SSE frame reader: yields `{event, data}` per blank-line-delimited block. */
+async function* sseFrames(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): AsyncGenerator<{ event: string; data: string }> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      let split: number;
+      while ((split = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+        let event = "message";
+        const data: string[] = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) data.push(line.slice(5).trim());
+        }
+        if (data.length) yield { event, data: data.join("\n") };
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+/**
+ * The model label a llama-server reports, in the TUI's own order and with
+ * its basename trim — `extractModelLabel` in
+ * src/tui/llm-health/llm-health-poller.ts. This is what the TUI's
+ * `llmHealth.model` holds, and therefore what `selectPromptLlmMeta` puts
+ * in the composer's model control on the custom (external) route: the
+ * operator's own server is the only thing that knows what it has loaded,
+ * and the managed catalogue id would name a file that route never touches.
+ */
+export function extractLlamaModelLabel(
+  props: Record<string, unknown>,
+  settings: Record<string, unknown> | undefined,
+): string | null {
+  const candidates: Array<unknown> = [
+    props["model_alias"],
+    settings?.["model"],
+    settings?.["model_alias"],
+    props["model"],
+    props["model_path"],
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (trimmed.length === 0) continue;
+    const parts = trimmed.split(/[\\/]/);
+    return parts[parts.length - 1] || trimmed;
+  }
+  return null;
+}

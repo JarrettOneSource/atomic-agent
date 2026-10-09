@@ -25,6 +25,12 @@ browser.
 | `linux-x64`    | linux    | x64    | `ubuntu-22.04`     | `tar.gz` |
 | `linux-arm64`  | linux    | arm64  | `ubuntu-24.04-arm` | `tar.gz` |
 | `win32-x64`    | win32    | x64    | `windows-2022`     | `zip`    |
+| `win32-arm64`  | win32    | arm64  | `windows-11-arm`   | `zip`    |
+
+`win32-arm64` is built natively on `windows-11-arm` but signed elsewhere: in
+the desktop workflow (`.github/workflows/desktop.yml`) the arm64 job uploads
+the bundle unsigned and an x64 `windows-2022` job signs it, because DigiCert's
+smctl/KSP ship for x64 only and `signtool sign` hangs under emulation there.
 
 Run `npm run bundle:matrix -- --json` to get the JSON input for a GitHub
 Actions matrix strategy.
@@ -158,7 +164,8 @@ once the archive is extracted.
 
 - **Version:** pinned in `scripts/fetch-assets.ts` via `RIPGREP_VERSION`.
   Bump that constant (and re-run `npm run bundle:fetch-assets --all`) to
-  refresh.
+  refresh. `win32-arm64` has its own pin (`RIPGREP_WIN32_ARM64_VERSION`,
+  15.1.0) because 14.1.1 publishes no `aarch64-pc-windows-msvc` build.
 - **Location:** copied by `scripts/package-bundle.ts` to
   `<bundle>/vendor/rg[.exe]` next to the SEA binary. The runtime resolver
   (`src/runtime/ripgrep-resolver.ts`) discovers it via

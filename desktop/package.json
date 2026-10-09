@@ -1,0 +1,48 @@
+{
+  "name": "atomic-agent-desktop",
+  "productName": "Atomic Agent",
+  "version": "0.0.1",
+  "description": "Desktop client for atomic-agent. Supervises a local `atag serve` process and drives it over the loopback HTTP API.",
+  "license": "MIT",
+  "homepage": "https://atomicagent.io",
+  "author": {
+    "name": "Atomic Bot",
+    "url": "https://atomicagent.io"
+  },
+  "desktopName": "atomic-agent-desktop.desktop",
+  "private": true,
+  "type": "commonjs",
+  "main": "out/main/main.js",
+  "scripts": {
+    "build": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/copy-renderer.mjs && node scripts/build-speech-helper.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:unit": "node --test test/*.test.mjs",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron . --dev",
+    "smoke": "npm run build && electron . --smoke",
+    "smoke:ci": "node scripts/smoke-ci.mjs",
+    "scenarios": "npm run build && node test/scenarios/run-all.mjs",
+    "drive:onboarding": "npm run build && node test/onboarding-mouse.mjs",
+    "drive:selector": "npm run build && node test/drive-selector.mjs",
+    "drive:models": "npm run build && node test/model-picks.drive.mjs",
+    "drive:cloud": "npm run build && node test/cloud-setup.drive.mjs",
+    "drive:integration": "npm run build && node test/integration.drive.mjs",
+    "drive:hover": "npm run build && node test/download-hover.drive.mjs",
+    "drive:wizard": "npm run build && node test/wizard-resume.drive.mjs",
+    "drive:fusion": "npm run build && node test/fusion.drive.mjs",
+    "drive:live": "npm run build && node test/live-routes.drive.mjs",
+    "dist": "npm run build && node -e \"require('node:fs').rmSync('release',{recursive:true,force:true})\" && electron-builder --mac --arm64 --publish never",
+    "dist:win": "npm run build && node -e \"require('node:fs').rmSync('release',{recursive:true,force:true})\" && electron-builder --win --x64 --publish never",
+    "dist:linux": "npm run build && node -e \"require('node:fs').rmSync('release',{recursive:true,force:true})\" && electron-builder --linux --publish never",
+    "postinstall": "node scripts/ensure-electron.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "cron-parser": "^5.5.0",
+    "electron-updater": "6.8.10"
+  }
+}

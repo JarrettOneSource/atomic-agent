@@ -1,0 +1,381 @@
+/* ============================================================
+   Settings — the window frame and nav for every section, and the
+   General, Tasks, Skills, Privacy and Diagnostics panes. Screens ST-01…11, ST-33.
+   Memory / MCP / Telegram / Import live in css/settings-data.css and LLM in
+   css/settings-llm.css; both load after this file and draw inside the frame
+   defined here. Colours come from tokens only.
+
+   Frame contract a tab can rely on:
+     #settings > .setwin > (nav.setnav > .setmenu) + .setmain
+     .setmain  — the floating body card, position:relative (overlays anchor here)
+       .settb    — the section's title (+ Connections' pane switch), the
+                   status line of a pane that polls (Д26) and Done
+       .setbody  — the scrolling pane, 24px side padding (paneBox() repaints it)
+     .set-pane    — a tab's root: a column with 14px gaps
+     .set-toolbar > .set-tbrow — the tab's toolbar rows (filters · search · counts · actions)
+     .set-overlay > .tk-modal.set-modal — a confirm over the whole body card
+   ============================================================ */
+
+/* ---------------- Window ---------------- */
+/* The window's size and the room around it, on #window so the toasts (a
+   sibling of #settings) can be placed inside it too (Д27).
+   Item 36: the system's own controls sit over the top 52px band of the
+   window — macOS's traffic lights at its left (hiddenInset, at 20,20; in
+   full screen the menu bar and the lights slide in over the same band when
+   the pointer is at the top), Windows' caption buttons at its right
+   (titleBarOverlay, 52px tall). With 24px all round, a small window put
+   them on the settings window's corners: the lights on the nav's top left,
+   the caption buttons on the header's top right, where the close control
+   is. The band is kept clear on both, and as much room is left under the
+   window as above it, so at the default size it sits exactly where it did.
+   Linux draws a normal frame above the page. */
+#window{--set-w:1060px;--set-h:700px;--set-gx:24px;--set-gy:24px}
+body.electron.platform-darwin #window,body.electron.platform-win32 #window{--set-gy:52px}
+#settings{position:absolute;inset:0;z-index:28;display:flex;align-items:center;justify-content:center;
+  padding:var(--set-gy) var(--set-gx);
+  background:var(--scrim);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+/* Item 5. The settings backdrop covers the 52px toolbar band, and
+   `body.electron #toolbar` is a `-webkit-app-region: drag` region. Chromium
+   unions the rects of elements that DECLARE a value and subtracts only those
+   that declare `no-drag`; an element painted on top with the initial value
+   contributes nothing and does not mask the region beneath it. So a real
+   mousedown in the top band of the backdrop started a window drag and never
+   produced a click, and the dismiss-on-outside-click branch could not fire
+   there. The smoke looks this rule up by its exact text — keep it verbatim. */
+body.electron #settings{-webkit-app-region:no-drag}
+/* The add-provider wizard (the composer's selector popup) floats above the settings window while it is open.
+   !important: paint() pins the layer with an INLINE z-index of 20, which beat this rule, so the wizard
+   opened from Settings › LLM (Add provider, the "… detected" prompt) was drawn behind the settings sheet. */
+#window:has(#settings) #overlays{z-index:29 !important}
+/* Д27: the toasts stood at the top right of the app window, so over Settings
+   they straddled the settings window's right edge and sat on its close
+   control. They stand inside it now, in the body card's bottom right corner:
+   clear of the header and the toolbars, and never out past the card's edge.
+   The same sums as #settings and .setwin below: the gap beside the settings
+   window, then 8px of the card's margin and 16px inside the card. */
+#window:has(#settings) #toasts{top:auto;
+  right:calc(max(var(--set-gx), (100% - var(--set-w)) / 2) + 24px);
+  bottom:calc(max(var(--set-gy), (100% - var(--set-h)) / 2) + 24px)}
+
+.setwin{position:relative;width:min(var(--set-w), 100%);height:min(var(--set-h), 100%);
+  display:grid;grid-template-columns:230px minmax(0,1fr);
+  background:var(--well);border-radius:var(--r-comp);box-shadow:var(--sh-pop);overflow:hidden}
+
+/* ---------------- Nav ---------------- */
+/* Calm (S5): nine sections, icon and name, nothing else — no keycaps, no
+   counts, no command list. */
+.setnav{min-width:0;min-height:0;display:flex;flex-direction:column;padding:16px 10px 12px}
+.setnav-title{margin:2px 10px 12px;font:600 15px/20px var(--font-ui);letter-spacing:-.02em;color:var(--ink)}
+/* Item 36: a window too short for every row scrolls the list instead of
+   cutting its last rows off at the window's edge; the rows keep their height
+   (flex:none). renderSettings keeps the scroll across its rebuilds. */
+.setmenu{flex:1;min-height:0;display:flex;flex-direction:column;gap:1px;overflow-y:auto;overscroll-behavior:contain}
+
+.menurow{position:relative;display:flex;align-items:center;gap:10px;width:100%;min-height:32px;padding:0 10px;flex:none;
+  border:0;border-radius:var(--r-pill);background:transparent;color:var(--ink-2);
+  font:500 13.5px/1.2 var(--font-ui);letter-spacing:-.003em;text-align:left;
+  transition:background-color var(--t-state) var(--ease),color var(--t-state) var(--ease)}
+.menurow > svg{flex:none;width:15px;height:15px;color:var(--ink-3)}
+button.menurow{cursor:pointer}
+button.menurow:hover{background:var(--hover);color:var(--ink)}
+button.menurow:hover > svg{color:var(--ink-2)}
+.menurow.on{background:var(--brand-wash);color:var(--blue)}
+.menurow.on > svg{color:var(--blue)}
+.menurow:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
+.menurow .lb{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The section switch inside a nav row: its label. */
+.settab{flex:1;min-width:0;align-self:stretch;display:flex;align-items:center}
+
+/* ---------------- Body card ---------------- */
+.setmain{position:relative;min-width:0;min-height:0;margin:8px 8px 8px 0;display:flex;flex-direction:column;
+  background:var(--lift);border-radius:var(--r-card);box-shadow:var(--sh-card);overflow:hidden}
+.settb{flex:none;height:62px;display:flex;align-items:center;gap:10px;padding:0 14px 0 24px}
+.settb .grow{flex:1}
+.settb .setttl{margin:0;font:600 18px/24px var(--font-ui);letter-spacing:-.025em;color:var(--ink)}
+/* Д26: the status line of a pane that polls; empty (and gone) elsewhere. The
+   line is a status, not a control (no hover, no pointer); paused, a Resume
+   link follows it. */
+.set-status{min-width:0;display:flex;align-items:center;gap:8px}
+.set-status:empty{display:none}
+.set-statusin{display:inline-flex;align-items:center;gap:7px;min-width:0;font:400 12px/1 var(--font-ui);color:var(--ink-2);white-space:nowrap}
+.set-statusin > .t{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.set-status .set-resume{flex:none;font:500 12px/1 var(--font-ui)}
+.set-statusin .tk-dot{width:7px;height:7px}
+.set-statusin .tk-spin{width:12px;height:12px}
+.settb .set-done{flex:none}
+/* Connections: MCP servers · Telegram beside the title. */
+.settb .set-subseg{margin-left:8px}
+.setbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 24px 22px;scrollbar-gutter:stable}
+
+/* ---------------- Utilities ---------------- */
+.set-cap{margin:0;font-size:12.5px;line-height:1.45;color:var(--ink-2)}
+.set-meta{margin:0;font:400 12px/1.5 var(--font-mono);color:var(--ink-2)}
+.set-desc{margin:0;font-size:14px;line-height:1.5;color:var(--ink-2)}
+.set-state{font-size:12.5px;color:var(--ink-2);white-space:nowrap}
+.set-state.on{color:var(--ink)}
+
+/* ---------------- A tab's pane ---------------- */
+.set-pane{display:flex;flex-direction:column;gap:14px;min-width:0;padding-top:2px}
+.set-pane > .tk-bar{min-height:34px}
+
+/* Toolbar */
+/* Two classes: `.tuibar` (the TUI-era class the toolbars still carry) and the
+   kit's `.tk-bar` both set align-items/flex-wrap at one class, and a centred
+   column would size each row to its content instead of the pane. */
+.tk-bar.set-toolbar{flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:10px;white-space:normal}
+/* A toolbar row never wraps: the search box and the counts give up width
+   first, the buttons keep theirs. */
+.set-tbrow{display:flex;align-items:center;flex-wrap:nowrap;gap:8px;min-width:0}
+.set-tbrow > *{flex:none}
+.set-tbrow .grow{flex:1 1 0;min-width:0}
+.set-seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.set-seg::-webkit-scrollbar{display:none}
+.set-tbrow > .set-counts{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.set-search{flex:0 1 280px;min-width:120px;height:34px;padding:0 6px 0 12px;cursor:text;color:var(--ink-3);font-size:13px}
+.set-tbrow > .set-search{flex:0 1 280px}
+.set-tbrow > .set-hubsearch{flex:1 1 300px}
+button.set-search{cursor:pointer;text-align:left}
+button.set-search:hover{border-color:var(--bd)}
+.set-search > svg{flex:none;width:15px;height:15px}
+.set-search .ph,.set-search .v{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.set-search .ph{color:var(--ink-3)}
+.set-search .v{color:var(--ink)}
+.set-search input{font-size:13px}
+.set-search .kc{flex:none}
+.set-hubsearch{flex:1 1 300px}
+.set-counts{font-size:12.5px;color:var(--ink-2);white-space:nowrap}
+
+/* Notices in a pane */
+.tuimsg.tk-notice,.tuierr.tk-notice{color:var(--ink)}
+.set-note{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--ink-2)}
+.set-softnote{background:var(--well);box-shadow:none;color:var(--ink-2)}
+.set-softnote > svg{color:var(--ink-3)}
+
+/* Empty and loading states */
+.set-empty{padding:40px 20px 28px}
+
+/* The `↑ N above` / `↓ N below` window lines, clickable. */
+.tuimore{display:inline-flex;align-items:center;height:28px;padding:0 12px;border:0;border-radius:var(--r-pill);background:transparent;
+  color:var(--ink-2);font:500 12.5px/1 var(--font-ui);white-space:pre;text-align:left;cursor:pointer}
+.tuimore:hover{background:var(--hover);color:var(--ink)}
+.tk-list > .tuimore{align-self:center;margin:2px 0}
+
+/* Confirm over the body card */
+.set-overlay{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:color-mix(in srgb, var(--scrim) 60%, transparent);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+.set-modal{width:min(440px, 100%)}
+.set-modal--wide{width:min(500px, 100%)}
+.set-mhead{display:flex;align-items:center;gap:10px}
+.set-modal p.mono{font:400 12px/1.5 var(--font-mono);color:var(--ink-2)}
+.set-modal .acts{flex-wrap:wrap}
+/* Kit override (reported): `.btn-df` sets --on-strong (white) on --critical,
+   and the dark theme's critical is a light red (#FF6A5C) where white reads at
+   ~2.9:1. --on-fill is white on light and near-black on dark. */
+#settings .btn-df,.tuiwrap .btn-df{color:var(--on-fill)}
+#settings .btn-df:hover,.tuiwrap .btn-df:hover{color:var(--on-fill)}
+#settings .btn-df .kc,.tuiwrap .btn-df .kc{color:var(--on-fill);border-color:color-mix(in srgb, var(--on-fill) 35%, transparent)}
+.set-scan{color:var(--critical);max-height:140px}
+
+/* ---------------- Tasks (ST-01…05) ---------------- */
+/* Д40: Refresh and New task on the filters' row; on a narrow window the pair
+   wraps under the filters as one, still on the right. */
+.set-tbrow.set-tbrow--wrap{flex-wrap:wrap;row-gap:10px}
+.set-tbacts{display:flex;align-items:center;gap:8px;margin-left:auto}
+.set-tblcard{padding:4px;overflow-x:auto}
+.set-tktbl th{height:34px}
+.set-tktbl td{height:40px}
+.set-tktbl th:first-child,.set-tktbl td:first-child{padding-left:12px}
+.set-tktbl td.mono{font:400 12px/1 var(--font-mono);color:var(--ink-2)}
+.set-tktbl .set-sched{max-width:240px;overflow:hidden;text-overflow:ellipsis}
+.set-tktbl .set-msg{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.set-tktbl tbody tr:focus-within td{background:var(--hover)}
+.set-tktbl tbody tr.on td{background:var(--brand-wash)}
+.set-rowbtn{display:inline-flex;align-items:center;padding:0;border:0;border-radius:var(--r-pill);background:transparent;cursor:pointer}
+.set-rowbtn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.set-morerow td{height:34px;text-align:center}
+
+/* Detail */
+.set-wellcard{display:flex;flex-direction:column;gap:12px;min-width:0;padding:18px 20px;border-radius:var(--r-card);background:var(--well)}
+.set-dtitle{margin:0;min-width:0;font:600 19px/1.3 var(--font-ui);letter-spacing:-.02em;color:var(--ink);overflow-wrap:anywhere}
+.set-dtitle.mono{font:500 19px/1.3 var(--font-mono);letter-spacing:0}
+.set-chips{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.set-plate{gap:8px 26px}
+.set-plate dt{font-size:13px}
+.set-plate dd{font-size:12.5px}
+.set-lasterr{align-items:flex-start}
+.set-lasterr > svg{margin-top:2px}
+.set-lasterr .mono{font-size:12px;line-height:1.55;overflow-wrap:anywhere}
+.set-section{display:flex;flex-direction:column;gap:2px}
+.set-section .tk-sh{padding:0;min-height:22px;color:var(--ink)}
+
+/* New task form */
+.set-formgrid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:22px;align-items:start}
+.set-formcol{display:flex;flex-direction:column;gap:16px;min-width:0}
+.set-form .tk-inp{width:100%;height:42px}
+.set-form .tk-inp.mono{font-size:13.5px}
+.set-prevcard{display:flex;flex-direction:column;gap:10px;min-width:0;padding:16px 18px;border-radius:var(--r-card);background:var(--well)}
+.set-prevh b{font:600 13.5px/1.3 var(--font-ui);color:var(--ink)}
+.set-firings{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px}
+.set-firings li{display:flex;align-items:center;gap:8px;font:400 12.5px/1.3 var(--font-mono);color:var(--ink);font-variant-numeric:tabular-nums}
+.set-firings li > svg{width:14px;height:14px;color:var(--ink-3)}
+.set-formfoot{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding-top:4px}
+.set-formfoot .grow{flex:1}
+/* tkPreview writes an inline success colour onto the submit button while the
+   caret is in the form; an ink pill keeps its paper label. */
+.set-submit{color:var(--paper)!important}
+.set-submit[disabled]{color:var(--ink-3)!important}
+
+/* ---------------- Skills (ST-06…11) ---------------- */
+/* The list's toolbar: where the tabs and the two buttons do not fit one line (a narrow window, long
+   counts), Refresh and Browse Skills Hub go to a second line, at its right, not past the pane's edge. */
+.set-sktb{flex-wrap:wrap;row-gap:8px}
+.set-sktb > .set-tbend{display:flex;align-items:center;gap:8px;margin-left:auto}
+/* Д43: a tab's count, quieter than its label. */
+.skpf .n{font-weight:500;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.skpf.on .n,.skpf[aria-pressed="true"] .n{color:var(--ink-2)}
+.set-sklist,.set-hublist{padding:6px}
+/* Д41: enabled · name · source · description (no Version column; the detail shows it). */
+.set-skcols,.set-skrow{display:grid;grid-template-columns:40px minmax(120px,190px) 96px minmax(0,1fr);align-items:center;column-gap:14px}
+.set-skcols{padding:6px 12px 6px;font:600 12px/1.2 var(--font-ui);color:var(--ink-2)}
+.set-skrow .t{font:500 13px/1.3 var(--font-mono);letter-spacing:0;color:var(--ink)}
+.set-skrow .d{min-width:0;font-size:13px;color:var(--ink-2);white-space:nowrap}
+.set-skrow.dim .t,.set-skrow.dim .d{color:var(--ink-3)}
+.set-skrow.on .t{color:var(--blue)}
+.set-src{min-width:0;display:flex}
+.set-hubrow{min-height:54px}
+.set-hubrow .t{font:500 13px/1.35 var(--font-mono);letter-spacing:0}
+.set-hubrow .d{white-space:nowrap}
+.set-hubrow .m{font-size:12px;color:var(--ink-2)}
+/* Д45: the hub's placeholder rows while it has nothing to show — its only loader then. */
+.set-skel .sk{display:block;height:10px;border-radius:5px;
+  background:linear-gradient(90deg, var(--hover) 25%, var(--press) 50%, var(--hover) 75%);background-size:200% 100%;
+  animation:set-skel 1.4s linear infinite}
+.set-skel .sk-t{width:42%;height:11px}
+.set-skel .sk-d{width:76%;margin-top:7px}
+.set-skel .sk-m{flex:none;width:34px}
+.set-skel .tk-li:nth-child(3n+2) .sk-t{width:34%}
+.set-skel .tk-li:nth-child(3n+2) .sk-d{width:62%}
+.set-skel .tk-li:nth-child(3n) .sk-t{width:50%}
+.set-skel .tk-li:nth-child(3n) .sk-d{width:84%}
+@keyframes set-skel{from{background-position:100% 0}to{background-position:-100% 0}}
+.set-titlerow{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-width:0}
+/* Д46: a ghost button (a page's back, Show source) flush with the text under it; its padding hangs into the gutter. */
+.set-flush{margin-left:-12px}
+/* Д46: the skill page's head — title and meta, Install on their line. */
+.set-cardhead{display:flex;align-items:center;gap:16px;min-width:0}
+.set-cardtitle{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.set-cardmeta{margin:0;font-size:13px;line-height:1.45;color:var(--ink-2)}
+.set-installing{display:inline-flex;align-items:center;gap:8px;flex:none;font-size:12.5px;color:var(--ink-2)}
+/* Д46: the published SKILL.md, folded under Show source; open, it is the whole file and the pane scrolls. */
+.set-srcfold{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0}
+.set-srcfold > .set-srcbody{align-self:stretch}
+.set-srcwait{display:inline-flex;align-items:center;gap:8px;min-height:30px;font-size:12.5px;color:var(--ink-2)}
+.set-skmd{margin:0;min-height:120px;padding:14px 16px;font-size:12px;line-height:1.6}
+.set-mdmore{color:var(--ink-2)}
+.set-loading{display:flex;align-items:center;gap:8px;color:var(--ink-2)}
+/* Built-in tools (item 09): the Skills table's card and rows — the glyph of the
+   tool's transcript card, name, description — under a heading per family. */
+.set-tlcols,.set-tlrow{display:grid;grid-template-columns:40px minmax(150px,230px) minmax(0,1fr);align-items:center;column-gap:14px}
+.set-tlcols{padding:6px 12px;font:600 12px/1.2 var(--font-ui);color:var(--ink-2)}
+.set-tlfam{padding:14px 12px 4px;font:500 12px/1.2 var(--font-mono);letter-spacing:0;color:var(--ink-2)}
+.set-tlic{display:flex;justify-content:center;color:var(--ink-3)}
+.set-tlic svg{width:14px;height:14px}
+.set-tlrow .t{font:500 13px/1.3 var(--font-mono);letter-spacing:0;color:var(--ink)}
+.set-tlrow .d{min-width:0;font-size:13px;color:var(--ink-2);white-space:nowrap}
+@media (max-width:1000px){.set-tlcols,.set-tlrow{grid-template-columns:40px minmax(120px,210px) minmax(0,1fr);column-gap:10px}}
+
+/* ---------------- Privacy (ST-33) ---------------- */
+.set-setlist{padding:6px}
+.set-setlist .tk-setrow{padding:10px 16px}
+.set-setlist .tk-help{margin-top:6px}
+/* General and Diagnostics (Calm S5). */
+.set-path{font-size:12px;color:var(--ink-2);user-select:text}
+.set-link{display:inline;padding:0;border:0;background:none;font:inherit;color:var(--blue);cursor:pointer}
+.set-link:hover{text-decoration:underline}
+.set-diaglist .tk-setrow{min-height:40px;gap:24px}
+.set-diagrow .t{flex:none;width:150px;font-weight:500;font-size:13px}
+.set-diagv{flex:1;min-width:0;font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:text;text-align:right}
+/* Д56: each value's Copy, close to it; an empty value keeps the column. */
+.set-diagrow .set-copybtn{flex:none;width:26px;margin:0 -8px 0 -16px;color:var(--ink-3)}
+.set-diagrow .iconbtn.set-copybtn:hover{color:var(--ink)}
+.set-diagrow .set-copybtn svg{width:14px;height:14px}
+.set-diagacts{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+/* Д55/Д57: what the screen is for, and what the report holds. */
+.set-diagintro{max-width:62ch}
+.set-diagwhat{max-width:62ch;margin-top:-6px}
+/* Д58: the model server's log, opened in place. */
+.set-diaglog{display:flex;flex-direction:column;gap:8px;min-width:0;padding-top:10px;border-top:1px solid var(--divider)}
+.set-diaglog-head{display:flex;align-items:center;gap:8px;min-width:0}
+.set-diaglog-head .grow{flex:1;min-width:0}
+.set-diaglog-head .set-cap{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.set-disc{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 6px;border:0;border-radius:var(--r-pill);background:transparent;
+  font:600 13px/1 var(--font-ui);color:var(--ink);cursor:pointer;transition:background var(--t-state) var(--ease)}
+.set-disc:hover{background:var(--hover)}
+.set-disc:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.set-disc > svg{width:14px;height:14px;color:var(--ink-3);transition:transform var(--t-state) var(--ease)}
+.set-diaglog.on .set-disc > svg{transform:rotate(90deg)}
+.set-logpath{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:text}
+.set-log{margin:0;padding:12px 16px;border-radius:var(--r-block);font-size:12px;line-height:1.7;user-select:text}
+.set-log .set-log-err{color:var(--critical)}
+.set-log .set-log-warn{color:var(--amber-text)}
+.set-log .set-log-ok{color:var(--blue)}
+.set-privnote{margin:0 22px}
+/* Д48: what Session grants said, as one line under the switch it is about. */
+.set-setlist .tk-help.set-privgrant{margin-top:4px;max-width:62ch}
+/* Д50: what analytics send — two plain lines under the switch, not two cards. */
+.set-privline{margin:2px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-2);max-width:62ch}
+.set-privline b{font-weight:500;color:var(--ink)}
+.set-privacy > .tk-notice{margin-top:2px}
+
+/* ---------------- 0.5.5 text-tab fallbacks ----------------
+   Tabs still drawn as TUI text (and the parts of them another slice has not
+   redrawn yet) keep these: a quiet Tactile version of the same markup. */
+.tui{display:flex;flex-direction:column;gap:6px;min-width:0;font:400 13px/1.5 var(--font-ui);color:var(--ink)}
+.tui b{font-weight:600;color:var(--ink)}
+.tui .ter{color:var(--ink-2)}
+.tuibar:not(.set-toolbar){display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;min-height:32px;color:var(--ink-2);white-space:pre-wrap}
+.tuihead{padding:6px 10px 2px;font:600 12px/1.4 var(--font-mono);color:var(--ink-2);white-space:pre;overflow:hidden}
+.tuirow{display:block;width:100%;min-height:34px;padding:7px 10px;border:0;border-radius:var(--r-well);background:transparent;
+  color:var(--ink);text-align:left;font:400 12.5px/20px var(--font-mono);white-space:pre;overflow:hidden;text-overflow:ellipsis;cursor:pointer;
+  transition:background var(--t-state) var(--ease)}
+.tuirow:hover{background:var(--hover)}
+.tuirow.on{background:var(--brand-wash);color:var(--blue)}
+.tuirow.dim{color:var(--ink-3)}
+.tuirow2 > span{display:block;white-space:pre;overflow:hidden;text-overflow:ellipsis}
+.tuimodal{display:flex;flex-direction:column;gap:6px;min-width:0;margin:4px 0;padding:14px 16px;border:0;border-radius:var(--r-card);background:var(--well)}
+.tuimodal.warn{box-shadow:inset 0 0 0 1.5px color-mix(in srgb, var(--amber) 70%, transparent)}
+.tuimodal.danger{box-shadow:inset 0 0 0 1.5px color-mix(in srgb, var(--critical) 55%, transparent)}
+.tuibody{margin:0;padding:10px 12px;border-radius:var(--r-well);background:var(--well);
+  font:400 12px/1.6 var(--font-mono);color:var(--ink);white-space:pre-wrap;word-break:break-word}
+.tuibody > div{min-height:19px}
+.tuimsg{color:var(--blue)}
+.tuierr{color:var(--critical)}
+.tuiarea{display:block;width:100%;margin-top:8px;padding:10px 14px;border:1px solid transparent;border-radius:18px;background:var(--well);
+  font:400 12.5px/1.5 var(--font-mono);color:var(--ink);resize:vertical;outline:none;white-space:pre}
+.tuiarea:focus{background:var(--lift);border-color:var(--brand);box-shadow:var(--focus-ring)}
+.tuiarea::placeholder{color:var(--ink-3)}
+.skpf{display:inline-flex;align-items:center;height:26px;padding:0 10px;border:0;border-radius:var(--r-pill);background:var(--hover);
+  color:var(--ink);font:500 12.5px/1 var(--font-ui);white-space:pre;cursor:pointer}
+.skpf:hover{background:var(--press)}
+.skpf.on{background:var(--brand-wash);color:var(--blue)}
+.skpf[disabled]{background:transparent;color:var(--ink-3);cursor:default}
+.skpaccent{color:var(--blue)}
+.sk-on{color:var(--success)}
+.sk-off{color:var(--amber-text)}
+
+/* The Tasks and Skills rooms (⌘2 / ⌘3 outside the window) wrap the same tab. */
+.tuiwrap{position:relative;max-width:1080px;margin:0 auto;padding:24px 28px}
+
+/* ---------------- Narrow window (≤1000px) ---------------- */
+@media (max-width:1000px){
+  .setwin{grid-template-columns:212px minmax(0,1fr)}
+  .settb{padding-left:18px}
+  .setbody{padding:0 18px 18px}
+  .set-formgrid{gap:16px}
+  .set-skcols,.set-skrow{grid-template-columns:40px minmax(100px,150px) 84px minmax(0,1fr);column-gap:10px}
+}
+/* Skills left out of the prompt (tui-parity.js). */
+.set-skills .set-skomit{display:flex;align-items:center;gap:6px;margin:0 0 8px}
+.set-skills .set-skomit svg{width:13px;height:13px;flex:none}
+/* ATO-241: which build, beside the version in General, small and quiet. */
+.tk-setrow .upd-build{font-size:11.5px;color:var(--ink-3)}

@@ -19,3 +19,7 @@ CLAW-LOOT.md
 /tmp/*
 .cursor/
 __pycache__/
+# Electron desktop client
+desktop/node_modules/
+desktop/out/
+desktop/release/

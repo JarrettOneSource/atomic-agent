@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Atomic Agent</title>
+<link rel="stylesheet" href="fonts.css">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="css/shell.css">
+<link rel="stylesheet" href="css/overlays.css">
+<link rel="stylesheet" href="css/popovers.css">
+<link rel="stylesheet" href="css/chat.css">
+<link rel="stylesheet" href="css/composer.css">
+<link rel="stylesheet" href="css/onboarding.css">
+<link rel="stylesheet" href="css/settings.css">
+<link rel="stylesheet" href="css/settings-data.css">
+<link rel="stylesheet" href="css/settings-llm.css">
+<link rel="stylesheet" href="css/motion.css">
+</head>
+<body>
+<div id="desktop">
+  <div id="menubar"></div>
+  <div id="stage">
+    <div id="window">
+      <div id="toolbar"></div>
+      <div id="main">
+        <aside id="sidebar"></aside>
+        <section id="content"></section>
+        <aside id="inspector"></aside>
+      </div>
+      <div id="console" class="hide"></div>
+      <!-- Backlog 18: the download card. It floats in the bottom-right corner,
+           over the window and under #overlays, so it never moves the chat the
+           way the #dlbar strip it replaced did. -->
+      <div id="dlcard" hidden></div>
+      <div id="overlays"></div>
+      <div id="toasts"></div>
+    </div>
+  </div>
+</div>
+<!-- Anonymous usage analytics and error reports: first, so its error listeners see the other modules load. -->
+<script src="analytics-acts.js"></script>
+<script src="analytics.js"></script>
+<script src="tui-parity.js"></script>
+<!-- Feature modules declare functions only; renderer.js boots the app and calls them. -->
+<script src="config-patch.js"></script>
+<script src="mcp-live.js"></script>
+<script src="session-titles.js"></script>
+<script src="app-update.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>
