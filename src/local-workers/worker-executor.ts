@@ -34,7 +34,7 @@ export function createWorkerExecutor(config: () => AtomicAgentConfig) {
             localModels: { mode: "external", url: new ModelGatewayClient(gateway).inferenceUrl(model.id), gateways: [gateway], completionMaxTokens: 4096 },
             llm: { activeTextProvider: provider.id, providers: [provider], runMode: { mode: "cloud" } },
             agent: { approvalLevel: 1, readScope: "working-dir", nameSessions: false, conversationMaxTokens: 0 },
-            memory: { recall: { enabled: false }, reflection: { enabled: false } },
+            memory: { reflection: { enabled: false } },
             analytics: { enabled: false }, log: { level: "warn" }, tracing: { trace: { enabled: false } },
         };
         await writeFile(join(state, "config.json"), JSON.stringify(childConfig) + "\n", { mode: 0o600 });

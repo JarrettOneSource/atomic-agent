@@ -33,3 +33,9 @@ See [operator usage](../../docs/user/local-workers.md). Checks cover queue limit
 workspace conflicts, cancellation, durable results, authenticated routes and the
 MCP adapter. Live acceptance additionally runs coding jobs through the SDK client
 and checks their actual files and tests.
+
+`ProjectMemory` exposes reviewed project notes through the central runtime's
+MemoryStore. Canonical project identity is also a dedup tag, and selection/deletion
+check both scope and provenance tags. The MCP caller selects note ids explicitly;
+worker briefs receive bounded copies as reference data, while the SQLite owner
+remains the hub. Memory tools never start inference.

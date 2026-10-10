@@ -1,5 +1,6 @@
 import { createSessionCompactionHandler } from "./route-compaction.js";
 import { createModelGatewayHandlers } from "./route-model-gateways.js";
+import { createProjectMemoryHandler } from "./route-project-memory.js";
 import { createLocalWorkerHandlers } from "./route-local-workers.js";
 import type { RouteDefinition } from "./http-server.js";
 
@@ -61,6 +62,9 @@ export function buildRouteTable(): RouteDefinition[] {
   const gateways = createModelGatewayHandlers();
   const workers = createLocalWorkerHandlers();
   return [
+    { method: "POST", path: "/api/local-workers/memory/recall", handler: createProjectMemoryHandler("recall") },
+    { method: "POST", path: "/api/local-workers/memory/store", handler: createProjectMemoryHandler("store") },
+    { method: "POST", path: "/api/local-workers/memory/forget", handler: createProjectMemoryHandler("forget") },
     { method: "GET", path: "/api/local-workers/models", handler: workers.models },
     { method: "GET", path: "/api/local-workers", handler: workers.list },
     { method: "POST", path: "/api/local-workers", handler: workers.submit },

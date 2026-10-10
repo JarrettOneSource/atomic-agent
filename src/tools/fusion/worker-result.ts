@@ -297,6 +297,9 @@ export class WorkerRunCollector {
               promptTokens: prev.promptTokens + next.promptTokens,
               completionTokens: prev.completionTokens + next.completionTokens,
               totalTokens: prev.totalTokens + next.totalTokens,
+              ...(prev.cachedTokens !== undefined || next.cachedTokens !== undefined
+                ? { cachedTokens: (prev.cachedTokens ?? 0) + (next.cachedTokens ?? 0) }
+                : {}),
             };
     }
   }

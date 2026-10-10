@@ -17,6 +17,8 @@ export interface GatewayModel {
   state: GatewayModelState;
   contextSize: number | null;
   parallelSlots?: number;
+  kvCache?: { k: string; v: string };
+  runtime?: string;
   supportsVision: boolean;
   sizeBytes: number | null;
   workspacePath: string | null;

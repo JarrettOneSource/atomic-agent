@@ -60,7 +60,7 @@ it("selects the real main and worker routes and returns to Solo without starting
   expect(getConfig().localModels.url).toBe(m5.definition.url + "/upstream/chat");
   expect((await action({ action: "start", hostId: "wsl", modelId: "chat", role: "worker" })).status).toBe(200);
   expect(getConfig().llm?.runMode?.mode).toBe("fusion");
-  expect(getConfig().llm?.providers.find(provider => provider.id === "gateway-worker")?.userModels?.[0]?.params).toEqual({ temperature: 0.6 });
+  expect(getConfig().llm?.providers.find(provider => provider.id === "gateway-worker")?.userModels?.[0]?.params).toEqual({ cache_prompt: true, temperature: 0.6 });
   expect((await action({ action: "solo" })).status).toBe(200);
   expect(getConfig().localModels.mode).toBe("external");
   expect(getConfig().localModels.url).toBe(m5.definition.url + "/upstream/chat");

@@ -10,7 +10,7 @@ export function gatewayWorkerProvider(gateway: ModelGatewayDefinition, model: Ga
     supportsTools: true,
     userModels: [{
       id: model.nativeModel, kind: "chat", supportsTools: "parallel",
-      ...(model.chatParams ? { params: model.chatParams } : {}),
+      params: { cache_prompt: true, ...model.chatParams },
       ...(model.contextSize ? { contextWindow: model.contextSize } : {}),
     }],
   };

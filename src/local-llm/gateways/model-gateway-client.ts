@@ -70,6 +70,7 @@ export class ModelGatewayClient {
       if (!id) throw new Error("Gateway returned a model without an id");
       const meta = model.meta ? object(model.meta, "metadata") : {};
       const details = meta.llamaswap ? object(meta.llamaswap, "model metadata") : {};
+      const kvCache = details.kvCache ? object(details.kvCache, "KV cache metadata") : null;
       const process = running.find((entry) => entry.model === id);
       return {
         id,
@@ -81,6 +82,8 @@ export class ModelGatewayClient {
         state: process?.state ?? "stopped",
         contextSize: number(details.contextSize),
         parallelSlots: Number.isInteger(details.parallelSlots) && Number(details.parallelSlots) >= 1 && Number(details.parallelSlots) <= 32 ? Number(details.parallelSlots) : 1,
+        ...(typeof kvCache?.k === "string" && typeof kvCache.v === "string" ? { kvCache: { k: kvCache.k, v: kvCache.v } } : {}),
+        ...(typeof details.runtime === "string" ? { runtime: details.runtime } : {}),
         supportsVision: details.supportsVision === true,
         sizeBytes: number(details.sizeBytes),
         workspacePath: typeof details.workspacePath === "string" ? details.workspacePath : null,

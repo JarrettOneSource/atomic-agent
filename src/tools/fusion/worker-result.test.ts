@@ -49,7 +49,7 @@ function reply(text: string): AgentLoopEvent {
 
 function completed(
   usage:
-    | { promptTokens: number; completionTokens: number; totalTokens: number }
+    | { promptTokens: number; completionTokens: number; totalTokens: number; cachedTokens?: number }
     | undefined,
 ): AgentLoopEvent {
   return {
@@ -77,6 +77,15 @@ function completed(
 }
 
 describe("WorkerRunCollector", () => {
+  it("preserves reported prompt-cache tokens across worker steps", () => {
+    const collector = new WorkerRunCollector();
+    collector.observe(completed({promptTokens:100,completionTokens:5,totalTokens:105,cachedTokens:80}));
+    collector.observe(completed({promptTokens:120,completionTokens:4,totalTokens:124,cachedTokens:110}));
+    collector.observe(completed({promptTokens:10,completionTokens:1,totalTokens:11}));
+    const result = collector.finish({id:"cache",title:"Cache",reason:"reply",stepCount:3,durationMs:100});
+    expect(result.usage).toEqual({promptTokens:230,completionTokens:10,totalTokens:240,cachedTokens:190});
+  });
+
   it("collects the reply, the tool tally and the summed usage", () => {
     const c = new WorkerRunCollector();
     c.observe(toolExecuted("os.fs.read", "ok"));

@@ -34,6 +34,9 @@ run the same adapter over an existing SSH connection to the hub.
 - `local_worker_result`: retrieve the result, tool statistics and worktree path.
 - `local_worker_cancel`: cancel queued or active work, preserving existing edits.
 - `local_worker_cleanup`: remove a finished job after integrating its changes.
+- `local_memory_recall`: retrieve reviewed project findings from the hub's SQLite.
+- `local_memory_store`: save a reviewed finding with its evidence.
+- `local_memory_forget`: remove an obsolete project finding.
 
 By default a coding job gets a detached git worktree from HEAD. Uncommitted source
 changes are not copied. Use `isolate: false` for a separate directory prepared by
@@ -48,12 +51,32 @@ prove that the changes meet the task. Cleanup refuses a dirty worktree by defaul
 `discardChanges: true` explicitly discards its remaining edits. It never deletes
 the original source workspace.
 
+## Shared project memory
+
+Memory tools take an absolute `projectDir` on the hub. A linked git worktree shares
+its primary checkout's memory; a non-repository directory uses its canonical path.
+Facts retain their evidence and project identity in the existing `memory.sqlite`.
+Project scopes remain separate even when identical content is deduplicated.
+
+Recall relevant notes before a task and pass up to five returned ids as
+`memoryIds` to `local_worker_run`. The bridge checks the project and adds their
+contents to the task as reference data. Workers still have temporary state and
+cannot silently update the shared store. After reviewing actual files and tests,
+the orchestrator can save a durable finding with the command, file or observation
+that supports it. Avoid credentials, transcripts and unverified worker claims.
+
+The store and recall tools do not start inference. Turning off Atomic notes
+(`memory.notes.enabled`) also disables these reads, writes and worker attachments;
+explicit removal remains available. Embeddings are optional and
+remain disabled unless separately configured; bounded FTS5 search works without
+an embedding model. The ordinary Atomic memory UI can also display these notes.
+
 ## Capacity and lifecycle
 
 `local-workers.json` in the controller's state directory sets operator defaults:
 
 ```json
-{"maxWorkers":2,"defaultHostId":"m5","defaultModelId":"qwen-large"}
+{"maxWorkers":4,"defaultHostId":"m5","defaultModelId":"qwen-large"}
 ```
 
 Restart the controller after changing this file. The default without it is one
@@ -68,7 +91,11 @@ speedup in that workload; four improved aggregate throughput by about one third
 while increasing individual latency. These are measured configurations, not a
 full-window quality benchmark or a universal maximum for other models.
 
-The installed bridge defaults to two workers at 256K. Additional jobs queue.
+The optimized SuperQwen profile supports four workers at 256K with Q8 keys and
+Turbo3 values. The host runtime is pinned to Atomic TurboQuant b10298-2.0.0;
+Flash Attention is enabled and experimental TurboFlash is disabled.
+[Measurements and constraints](../research/turboquant-m5.md) distinguish allocation,
+throughput and correctness evidence. Additional jobs queue.
 Atomic's model picker can use the main model as its worker on the same host;
 separate models must fit their host and avoid conflicting exclusive groups.
 Fusion's selected worker count follows the model's declared slots.
@@ -78,3 +105,9 @@ models. Stopping one model cancels its jobs. Controller shutdown stops child
 processes; unfinished jobs after an unexpected restart are marked interrupted.
 Closing Codex or Claude disconnects that MCP client and leaves jobs with Atomic.
 Keep models on-demand and let the gateway's idle policy unload them afterward.
+
+Worker results retain the provider's reported `usage.cachedTokens` across steps.
+Gateway workers explicitly request prompt caching; a host's model parameters can
+override it. `local_worker_models` reports declared cache types and runtime when
+the gateway supplies that metadata. Native agent calls retain Atomic's GBNF;
+OpenAI-compatible workers use the server's tool-schema constraints.
