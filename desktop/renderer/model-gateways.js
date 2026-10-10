@@ -62,6 +62,7 @@ function openGatewayDialog() {
 }
 function paintGatewayDialog() {
   const dialog=GATEWAYS.dialog;if(!dialog)return;
+  const scrollTop=dialog.querySelector('.gateway-hosts')?.scrollTop || 0;
   const snapshot=GATEWAYS.snapshot;
   const hosts=snapshot ? snapshot.hosts : [];
   const row=(host,model)=>{
@@ -89,6 +90,7 @@ function paintGatewayDialog() {
     +'<div class="gateway-notice" role="status">'+esc(GATEWAYS.error || GATEWAYS.connectionError || GATEWAYS.message || '')+'</div>'
     +'<div class="gateway-hosts">'+(hosts.length ? hosts.map(host=>'<section><h3>'+esc(host.gateway.name)+'<span>'+ (host.online?'Online':'Offline')+'</span></h3>'
       +(host.error?'<p class="gateway-facts">'+esc(host.error)+'</p>':'')+host.models.map(model=>row(host,model)).join('')+'</section>').join('') : '<p>Loading model gateways…</p>')+'</div>';
+  dialog.querySelector('.gateway-hosts').scrollTop=scrollTop;
 }
 function gatewayResult(result) {
   if(!result || !result.ok) throw new Error(result?.error || 'The model action failed');
