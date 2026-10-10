@@ -11,6 +11,7 @@ import { ApprovalBus } from "./approval-bus.js";
 import { CompletionRegistry } from "./completion-registry.js";
 import { openaiError } from "./openai-errors.js";
 import { UndeliveredSteerStore } from "./undelivered-steers.js";
+import type { LocalWorkerJobs } from "../local-workers/worker-jobs.js";
 import {
   BodyParseError,
   BodyTooLargeError,
@@ -48,6 +49,7 @@ export interface HttpServerOptions {
   approvalBus?: ApprovalBus;
   completionRegistry?: CompletionRegistry;
   undeliveredSteers?: UndeliveredSteerStore;
+  localWorkers?: LocalWorkerJobs;
 }
 
 export interface HttpServerHandle {
@@ -142,6 +144,7 @@ export function createHttpServer(
         approvalBus,
         completionRegistry,
         undeliveredSteers,
+        localWorkers: options.localWorkers,
       });
     } catch (err) {
       handleRouteError(res, err);
@@ -181,7 +184,11 @@ export function createHttpServer(
         approvalBus,
         completionRegistry,
         undeliveredSteers,
-        close: () => closeServer(server, sockets),
+        close: async () => {
+          const workers = options.localWorkers?.close();
+          await closeServer(server, sockets);
+          await workers;
+        },
       });
     };
     server.once("error", onError);

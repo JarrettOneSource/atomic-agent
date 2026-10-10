@@ -1,5 +1,6 @@
 import { createSessionCompactionHandler } from "./route-compaction.js";
 import { createModelGatewayHandlers } from "./route-model-gateways.js";
+import { createLocalWorkerHandlers } from "./route-local-workers.js";
 import type { RouteDefinition } from "./http-server.js";
 
 import { createChatCompletionsHandler } from "./openai-chat-completions.js";
@@ -58,7 +59,14 @@ export function buildRouteTable(): RouteDefinition[] {
   // set them (see route-coding-mode.ts `inferMode`).
   const codingMode = createCodingModeHandlers();
   const gateways = createModelGatewayHandlers();
+  const workers = createLocalWorkerHandlers();
   return [
+    { method: "GET", path: "/api/local-workers/models", handler: workers.models },
+    { method: "GET", path: "/api/local-workers", handler: workers.list },
+    { method: "POST", path: "/api/local-workers", handler: workers.submit },
+    { method: "GET", path: "/api/local-workers/{id}", handler: workers.get },
+    { method: "POST", path: "/api/local-workers/{id}/cancel", handler: workers.cancel },
+    { method: "POST", path: "/api/local-workers/{id}/cleanup", handler: workers.cleanup },
     { method: "GET", path: "/api/model-gateways", handler: gateways.list },
     { method: "POST", path: "/api/model-gateways", handler: gateways.action },
     {

@@ -3,6 +3,12 @@ import { getConfig } from "../config/index.js";
 import { createAgentRuntime } from "../runtime/bootstrap.js";
 import { createStderrSink } from "../tracing/structured-logger.js";
 import type { AgentRuntime } from "../runtime/bootstrap.js";
+import { join } from "node:path";
+import { LocalWorkerJobs } from "../local-workers/worker-jobs.js";
+import { createWorkerExecutor } from "../local-workers/worker-executor.js";
+import { readWorkerSettings } from "../local-workers/worker-settings.js";
+import { writeWorkerConnection } from "../local-workers/worker-connection.js";
+import { ModelGatewayClient } from "../local-llm/gateways/model-gateway-client.js";
 
 import { HELP, parseArgs } from "./serve-args.js";
 import { watchForOrphaning } from "./serve-orphan-guard.js";
@@ -53,6 +59,8 @@ export async function serveCommand(args: string[]): Promise<number> {
   let handle: HttpServerHandle | null = null;
   let releaseRecord: (() => void) | null = null;
   let orphanWatch: OrphanWatch | null = null;
+  let localWorkers: LocalWorkerJobs | null = null;
+  let releaseWorkerConnection: (() => void) | null = null;
   try {
     runtime = await createAgentRuntime({
       workingDir: parsed.workingDir,
@@ -85,6 +93,21 @@ export async function serveCommand(args: string[]): Promise<number> {
         onApprovalRequest: (request) => approvalBus.publish(request),
       },
     });
+    const workerRuntime = runtime;
+    const executeWorker = createWorkerExecutor(getConfig);
+    localWorkers = new LocalWorkerJobs({
+      root: join(stateDir, "local-worker-jobs"),
+      maxWorkers: readWorkerSettings(stateDir).maxWorkers,
+      run: async (job, signal, publish) => {
+        await workerRuntime.gatewayTasks.waitForModelChanges(signal);
+        const gateway = getConfig().localModels.gateways.find(host => host.id === job.hostId);
+        if (!gateway) throw new Error("The worker host is no longer configured");
+        const lease = await workerRuntime.gatewayTasks.prepare([new ModelGatewayClient(gateway).inferenceUrl(job.modelId)], signal);
+        try { return await executeWorker(job, lease.signal, publish); }
+        finally { lease.release(); }
+      },
+    });
+    await localWorkers.open();
     handle = await createHttpServer({
       runtime,
       host: parsed.host,
@@ -93,7 +116,9 @@ export async function serveCommand(args: string[]): Promise<number> {
       routes: buildRouteTable(),
       approvalBus,
       completionRegistry,
+      localWorkers,
     });
+    if (parsed.apiKey) releaseWorkerConnection = writeWorkerConnection(stateDir, { pid: process.pid, host: handle.host, port: handle.port, apiKey: parsed.apiKey });
     const authNote = parsed.apiKey ? "auth=bearer" : "auth=none";
     process.stderr.write(
       `[atomic-agent] serve listening on http://${handle.host}:${handle.port} (${authNote}, cwd=${parsed.workingDir})\n`,
@@ -138,7 +163,9 @@ export async function serveCommand(args: string[]): Promise<number> {
     return 1;
   } finally {
     orphanWatch?.stop();
+    releaseWorkerConnection?.();
     if (handle) await handle.close();
+    else await localWorkers?.close();
     if (runtime) await runtime.shutdown();
     // Released last, and only once the port and the databases are
     // actually let go. A teardown that wedges must stay on record:

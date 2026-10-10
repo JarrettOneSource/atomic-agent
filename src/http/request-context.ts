@@ -4,6 +4,7 @@ import type { AgentRuntime } from "../runtime/bootstrap.js";
 import type { ApprovalBus } from "./approval-bus.js";
 import type { CompletionRegistry } from "./completion-registry.js";
 import type { UndeliveredSteerStore } from "./undelivered-steers.js";
+import type { LocalWorkerJobs } from "../local-workers/worker-jobs.js";
 
 /**
  * Small, dependency-free helpers that every HTTP route needs. Kept in
@@ -29,6 +30,7 @@ export interface HandlerContext {
    * `GET /api/sessions/{id}/steer`.
    */
   undeliveredSteers: UndeliveredSteerStore;
+  localWorkers?: LocalWorkerJobs;
 }
 
 export type HttpHandler = (

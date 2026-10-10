@@ -10,6 +10,7 @@ This area owns http and openai-compatible ingress. Read [AGENTS.md](AGENTS.md) b
 - [http-server.ts](http-server.ts)
 - [route-sessions.ts](route-sessions.ts)
 - [route-mcp.ts](route-mcp.ts)
+- [route-local-workers.ts](route-local-workers.ts): authenticated external worker jobs.
 - [route-model-gateways.ts](route-model-gateways.ts): authenticated catalog and model controls.
 - [request-context.ts](request-context.ts)
 - [openai-completions-cancel.ts](openai-completions-cancel.ts)

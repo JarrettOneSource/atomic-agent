@@ -68,23 +68,25 @@ function paintGatewayDialog() {
   const row=(host,model)=>{
     const main=snapshot.main && snapshot.main.hostId===host.gateway.id && snapshot.main.modelId===model.id;
     const worker=snapshot.worker && snapshot.worker.hostId===host.gateway.id && snapshot.worker.modelId===model.id;
+    const mainModel=gatewayMainModel();
+    const workerConflict=mainModel && mainModel.host.gateway.id===host.gateway.id && mainModel.model.id!==model.id && model.group && model.group===mainModel.model.group;
     const conflict=model.group && host.models.find(other=>other.id!==model.id && other.group===model.group && ['ready','starting','stopping'].includes(other.state));
     const disabled=!host.online || GATEWAYS.busy || !!conflict;
     const running=model.state!=='stopped';
     const status=host.online ? ({ready:'Ready',starting:'Loading',stopping:'Stopping',failed:'Failed',stopped:'Stopped'}[model.state] || model.state) : 'Offline';
-    const facts=[model.kind,model.sizeBytes ? (model.sizeBytes/1024**3).toFixed(1)+' GiB' : '',model.contextSize?Math.round(model.contextSize/1024)+'K context':'',model.supportsVision?'Vision':'',model.ttlSeconds?'Unloads after '+Math.round(model.ttlSeconds/60)+' idle minutes':''].filter(Boolean).join(' · ');
+    const facts=[model.kind,model.sizeBytes ? (model.sizeBytes/1024**3).toFixed(1)+' GiB' : '',model.contextSize?Math.round(model.contextSize/1024)+'K context':'',model.parallelSlots>1?model.parallelSlots+' worker slots':'',model.supportsVision?'Vision':'',model.ttlSeconds?'Unloads after '+Math.round(model.ttlSeconds/60)+' idle minutes':''].filter(Boolean).join(' · ');
     const startText=model.kind==='llm' ? (model.state==='ready'?'Use':'Start & use') : 'Start';
     const button=(action,label,off)=>'<button class="btn" data-gateway-action="'+action+'" data-host="'+esc(host.gateway.id)+'" data-model="'+esc(model.id)+'"'+(off?' disabled':'')+'>'+label+'</button>';
     return '<article class="gateway-model'+(main?' main':'')+'"><div class="gateway-model-copy"><div class="gateway-model-name">'+esc(model.name)
       +(main?'<span class="gateway-tag">Main</span>':'')+(worker?'<span class="gateway-tag">'+(snapshot.mode==='fusion'?'Worker':'Worker off')+'</span>':'')+'</div>'
       +'<div class="gateway-facts">'+esc(facts)+'</div>'+(conflict?'<div class="gateway-facts">Stop '+esc(conflict.name)+' to use this model.</div>':'')
       +'</div><span class="gateway-state '+(host.online?model.state:'offline')+'">'+esc(status)+'</span><div class="gateway-actions">'
-      +button('start',startText,disabled)+(model.kind==='llm'?button('worker','Worker',disabled || !snapshot.main || snapshot.main.hostId===host.gateway.id):'')
+      +button('start',startText,disabled)+(model.kind==='llm'?button('worker','Worker',disabled || !snapshot.main || workerConflict):'')
       +button('stop','Stop',!host.online || !running)
       +(model.state==='ready' && model.workspacePath ? button('workspace','Open',!host.online) : '')+'</div></article>';
   };
   dialog.innerHTML='<header><div><h2>Models</h2><p>Start models on their hosts. Status checks keep stopped models unloaded.</p></div><button class="btn icon" data-gateway-close aria-label="Close model controls">'+ic('x')+'</button></header>'
-    +'<div class="gateway-mode"><span>'+((snapshot && snapshot.mode==='fusion')?'Fusion · main model and worker':'Solo · main model')+'</span><div>'
+    +'<div class="gateway-mode"><span>'+((snapshot && snapshot.mode==='fusion')?'Fusion · main model and worker':'Solo · main model')+(snapshot?.externalWorkers?.active?' · '+snapshot.externalWorkers.active+' external worker jobs':'')+'</span><div>'
     +'<button class="btn" data-gateway-action="mode"'+(GATEWAYS.busy?' disabled':'')+'>'+((snapshot && snapshot.mode==='fusion')?'Use Solo':'Enable Fusion')+'</button>'
     +'<button class="btn" data-gateway-action="refresh">Refresh</button><button class="btn danger" data-gateway-action="stop-all">Stop all</button></div></div>'
     +'<div class="gateway-notice" role="status">'+esc(GATEWAYS.error || GATEWAYS.connectionError || GATEWAYS.message || '')+'</div>'

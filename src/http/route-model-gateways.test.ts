@@ -15,13 +15,13 @@ afterEach(async () => {
   })));
 });
 const headers = { authorization: "Bearer test-key", "content-type": "application/json" };
-async function host(id: string) {
+async function host(id: string, siblings = false) {
   let loaded = false;
   const requests: string[] = [];
   const server = createServer((req, res) => {
     requests.push(`${req.method} ${req.url}`);
     res.setHeader("Content-Type", "application/json");
-    if (req.url === "/v1/models") res.end(JSON.stringify({ data: [{ id: "chat", name: id, meta: { llamaswap: { nativeModel: id, chatParams: { temperature: 0.6 } } } }] }));
+    if (req.url === "/v1/models") res.end(JSON.stringify({ data: [{ id: "chat", name: id, meta: { llamaswap: { nativeModel: id, parallelSlots: 2, group: "large", chatParams: { temperature: 0.6 } } } }, ...(siblings ? [{ id: "other", meta: { llamaswap: { kind: "llm", group: "large" } } }] : [])] }));
     else if (req.url === "/running") res.end(JSON.stringify({ running: loaded ? [{ model: "chat", state: "ready" }] : [] }));
     else if (req.url === "/upstream/chat/") { loaded = true; res.writeHead(404).end("{}"); }
     else if (req.url?.startsWith("/api/models/unload")) { loaded = false; res.end("{}"); }
@@ -98,4 +98,25 @@ it("a turn arriving during a model change waits and then loads the newly selecte
   expect(m5.loaded()).toBe(false); expect(wsl.loaded()).toBe(false);
   release(); await switching; await text;
   expect(m5.loaded()).toBe(false); expect(wsl.loaded()).toBe(true);
+});
+
+it("allows main and worker sessions to share one M5 model and keeps Fusion on main reselection", async () => {
+  const m5 = await host("m5"); await configure(m5);
+  expect((await action({ action: "start", hostId: "m5", modelId: "chat", role: "main" })).status).toBe(200);
+  expect((await action({ action: "start", hostId: "m5", modelId: "chat", role: "worker" })).status).toBe(200);
+  expect(getConfig().llm?.runMode?.mode).toBe("fusion");
+  expect(getConfig().llm?.runMode?.fusion?.workers).toBe(2);
+  expect((await action({ action: "start", hostId: "m5", modelId: "chat", role: "main" })).status).toBe(200);
+  expect(getConfig().llm?.runMode?.mode).toBe("fusion");
+  expect(getConfig().llm?.runMode?.fusion?.workers).toBe(2);
+  expect((await action({ action: "solo" })).status).toBe(200);
+  expect(m5.loaded()).toBe(true);
+});
+
+it("refuses a different same-host worker when it conflicts with the main model exclusive group", async () => {
+  const m5 = await host("m5", true); await configure(m5);
+  const response = await action({action:"start", hostId:"m5", modelId:"other", role:"worker"});
+  expect(response.status).toBe(500);
+  expect(await response.text()).toContain("exclusive group");
+  expect(m5.loaded()).toBe(false);
 });

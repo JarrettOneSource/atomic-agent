@@ -28,6 +28,7 @@ export function createModelGatewayHandlers(): { list: HttpHandler; action: HttpH
     }));
     sendJson(res, 200, {
       hosts, mode: mode.effective, busy: ctx.runtime.gatewayTasks.controlsBusy,
+      externalWorkers: { active: ctx.localWorkers?.activeCount??0, queued: ctx.localWorkers?.pendingCount??0 },
       main: main ? { hostId: main.gateway.id, modelId: main.modelId } : null,
       worker: workerTarget ? { hostId: workerTarget.gateway.id, modelId: workerTarget.modelId } : null,
     });
@@ -42,6 +43,7 @@ export function createModelGatewayHandlers(): { list: HttpHandler; action: HttpH
       ctx.completionRegistry.cancelAll();
       ctx.runtime.gatewayTasks.cancelAll();
       const result = await ctx.runtime.gatewayTasks.changeModels<ActionResult>(async signal => {
+        await ctx.localWorkers?.cancelAll();
         const results = await Promise.allSettled(config.localModels.gateways.map(gateway => new ModelGatewayClient(gateway).stopAll(signal)));
         const failures = results.flatMap(result => result.status === "rejected" ? [String(result.reason)] : []);
         return failures.length ? { ok: false, errors: failures } : { ok: true };
@@ -49,37 +51,42 @@ export function createModelGatewayHandlers(): { list: HttpHandler; action: HttpH
       sendJson(res, 200, result); return;
     }
     if (action === "solo") {
-      if (ctx.runtime.gatewayTasks.activeCount > 0 || ctx.completionRegistry.size() > 0) { sendJson(res, 409, { error: { message: "Stop the running task before changing modes" } }); return; }
+      if ((ctx.localWorkers?.activeCount??0)>0 || ctx.runtime.gatewayTasks.activeCount > 0 || ctx.completionRegistry.size() > 0) { sendJson(res, 409, { error: { message: "Stop the running task before changing modes" } }); return; }
       const result = await ctx.runtime.gatewayTasks.changeModels<ActionResult>(async signal => {
         const providers = resolveLlmConfig(getConfig());
         const worker = providers.providers.find(provider => provider.id === resolveRunMode(providers).workerProviderId);
         const target = worker?.baseUrl ? findGatewayTarget(worker.baseUrl, getConfig().localModels.gateways) : null;
         selectGatewaySolo();
         await ctx.runtime.reloadLlmProviders();
-        if (target) await new ModelGatewayClient(target.gateway).stop(target.modelId, signal);
+        const main = findGatewayTarget(getConfig().localModels.url, getConfig().localModels.gateways);
+        if (target && (target.gateway.id !== main?.gateway.id || target.modelId !== main.modelId)) await new ModelGatewayClient(target.gateway).stop(target.modelId, signal);
         return { ok: true };
       }, { cancelled: true });
       sendJson(res, 200, result); return;
     }
     const gateway = config.localModels.gateways.find(host => host.id === hostId);
     if (!gateway || typeof modelId !== "string") { sendJson(res, 400, { error: { message: "Choose a configured host and model" } }); return; }
-    if (action === "start" && (ctx.completionRegistry.size() > 0 || ctx.runtime.gatewayTasks.activeCount > 0)) {
+    if (action === "start" && ((ctx.localWorkers?.activeCount??0)>0 || ctx.completionRegistry.size() > 0 || ctx.runtime.gatewayTasks.activeCount > 0)) {
       sendJson(res, 409, { error: { message: "Stop the running task before changing its models" } }); return;
     }
     if (action === "stop") ctx.runtime.gatewayTasks.cancelModel(gateway.id, modelId);
     const result = await ctx.runtime.gatewayTasks.changeModels<ActionResult>(async signal => {
+      if (action === "stop") await ctx.localWorkers?.cancelFor(gateway.id, modelId);
       const client = new ModelGatewayClient(gateway);
-      const model = (await client.list(signal)).find(row => row.id === modelId);
+      const models = await client.list(signal);
+      const model = models.find(row => row.id === modelId);
       if (!model) throw new Error("The model is not installed on this host");
       if (action === "stop") { await client.stop(modelId, signal); return { ok: true }; }
       if (role === "worker") {
         if (model.kind !== "llm") throw new Error("Choose a chat model for the worker");
         const main = findGatewayTarget(config.localModels.url, config.localModels.gateways);
-        if (!main || main.gateway.id === gateway.id) throw new Error("Choose a worker on another host");
+        if (!main) throw new Error("Choose a main model first");
+        const mainModel = main.gateway.id === gateway.id ? models.find(row => row.id === main.modelId) : undefined;
+        if (mainModel && mainModel.id !== model.id && model.group && model.group === mainModel.group) throw new Error("Main and worker models share an exclusive group; share the main model or choose a compatible model");
       }
       await client.start(modelId, signal); signal.throwIfAborted();
       if (model.kind === "llm") {
-        selectGatewayModel(gateway, model, role === "worker" ? "worker" : "main");
+        selectGatewayModel(gateway, model, role === "worker" ? "worker" : "main", models);
         await ctx.runtime.reloadLlmProviders();
         if (role !== "worker") await ctx.runtime.refreshLocalModelProfile();
         signal.throwIfAborted();

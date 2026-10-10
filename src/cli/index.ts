@@ -20,6 +20,10 @@ import { updateCommand } from "./update-command.js";
 import { tuiCommand } from "../tui/index.js";
 import { installTransportDeadlines } from "../llm/transport-deadlines.js";
 import { getAppVersion } from "../version.js";
+import { workerRunCommand } from "./worker-run-command.js";
+import { startWorkerMcp } from "../local-workers/worker-mcp.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { USER_CONFIG_DEFAULTS } from "../config/index.js";
 
 interface CommandDescriptor {
@@ -60,6 +64,12 @@ interface CommandDescriptor {
 }
 
 const COMMANDS: CommandDescriptor[] = [
+  { name: "worker-run", summary: "Run one scoped worker job", run: workerRunCommand, hidden: true },
+  { name: "worker-mcp", summary: "Connect Codex or Claude to the Atomic local worker queue", run: async (args) => {
+    if(args.includes("--help")){process.stdout.write("Usage: atomic-agent worker-mcp\nUses the Atomic controller in ATOMIC_AGENT_STATE_DIR.\n");return 0;}
+    if(args.length)throw new Error("worker-mcp takes no arguments; use ATOMIC_AGENT_STATE_DIR");
+    await startWorkerMcp(process.env.ATOMIC_AGENT_STATE_DIR??join(homedir(),".atomic-agent"));return 0;
+  } },
   {
     name: "run",
     summary: "Run a full agent loop against a goal in a working directory",

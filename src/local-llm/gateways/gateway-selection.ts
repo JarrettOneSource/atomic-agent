@@ -5,7 +5,7 @@ import { gatewayWorkerProvider } from "./gateway-worker-provider.js";
 import type { GatewayModel, ModelGatewayDefinition } from "./model-gateway-types.js";
 
 /** Persist the route together with its provider and Fusion seats. */
-export function selectGatewayModel(gateway: ModelGatewayDefinition, model: GatewayModel, role: "main" | "worker"): void {
+export function selectGatewayModel(gateway: ModelGatewayDefinition, model: GatewayModel, role: "main" | "worker", peers: readonly GatewayModel[] = []): void {
   if (role === "worker") upsertLlmProvider(gatewayWorkerProvider(gateway, model));
   const path = getConfig().paths.userConfigFile;
   const file = ensureUserConfigFileSync(path);
@@ -17,10 +17,13 @@ export function selectGatewayModel(gateway: ModelGatewayDefinition, model: Gatew
     llm.providers = [...llm.providers.filter(provider => provider.id !== "local-llama"), { ...old, id: "local-llama", kind: "llama-server", url, model: model.nativeModel }];
     const worker = llm.providers.find(provider => provider.id === llm.runMode?.fusion?.workerProvider);
     const workerHost = worker?.baseUrl ? findGatewayTarget(worker.baseUrl, file.localModels.gateways) : null;
-    if (llm.runMode?.mode === "fusion" && workerHost?.gateway.id === gateway.id) llm.runMode = { ...llm.runMode, mode: "local" };
+    const workerModel = peers.find(peer => peer.id === workerHost?.modelId);
+    if (llm.runMode?.mode === "fusion" && workerHost?.gateway.id === gateway.id &&
+        workerHost.modelId !== model.id && (!workerModel || (!!model.group && model.group === workerModel.group))) llm.runMode = { ...llm.runMode, mode: "local" };
     else if (llm.runMode?.mode === "fusion") llm.runMode = { ...llm.runMode, fusion: { ...llm.runMode.fusion, orchestratorProvider: "local-llama" } };
   } else {
-    llm.runMode = { mode: "fusion", fusion: { orchestratorProvider: "local-llama", workerProvider: "gateway-worker", workers: 1, cloudWorkers: 1 } };
+    const workers = Math.max(1, Math.min(8, model.parallelSlots ?? 1));
+    llm.runMode = { mode: "fusion", fusion: { orchestratorProvider: "local-llama", workerProvider: "gateway-worker", workers, cloudWorkers: workers } };
   }
   llm.activeTextProvider = "local-llama";
   file.llm = llm;

@@ -21,13 +21,15 @@ LLM. Configured gateway routes select this pane automatically. Keyboard controls
 - **Enter / Start:** load the selected model. Chat models also become the main
   agent model; other kinds keep the chat route unchanged.
 - **s / Stop:** stop the model and runtime tasks using it.
-- **w / Worker:** use a chat model on another host as the Fusion worker.
+- **w / Worker:** use a compatible chat model as the Fusion worker, including
+  the main model on the same host.
 - **f / Solo/Fusion:** toggle the helper. Solo unloads the helper.
 - **X / Stop all:** cancel active gateway tasks and queued chat work, then unload
   each reachable host. Unavailable hosts are not counted as stopped.
 - **r / Refresh:** refresh status without loading a model.
 
-Models in the same exclusive group require Stop before another starts. This
+Multiple agents can share one loaded model through its inference slots.
+Different models in the same exclusive group require Stop before another starts. This
 prevents a chat request from silently replacing an image/video render. Starting,
 ready, stopped and offline are distinct states. Closing the browser does not end
 a task; completed turns release their leases and the host's idle policy applies.
@@ -153,3 +155,5 @@ The gateways and model weights do not need to restart for an Atomic-only update.
 Keep machine-specific gateway configuration and service definitions outside this
 checkout. If the change updates gateway protocols or launch profiles, repeat the
 cold-start, Stop, idle and Fusion checks before making it the active build.
+
+For Codex and Claude Code delegation, see [local workers](local-workers.md).

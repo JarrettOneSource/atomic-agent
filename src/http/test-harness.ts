@@ -35,6 +35,7 @@ import { ApprovalBus } from "./approval-bus.js";
 import { CompletionRegistry } from "./completion-registry.js";
 import { createHttpServer, type HttpServerHandle } from "./http-server.js";
 import { buildRouteTable } from "./route-table.js";
+import type { LocalWorkerJobs } from "../local-workers/worker-jobs.js";
 
 /**
  * Inert browser backend — the HTTP tests never actually drive a
@@ -79,6 +80,7 @@ export class FakeBrowserBackend implements BrowserBackend {
 }
 
 export interface HarnessOptions {
+  localWorkers?: LocalWorkerJobs;
   /** When set, the HTTP server requires this bearer token. */
   apiKey?: string | null;
   /**
@@ -240,6 +242,7 @@ export async function startTestHarness(
     routes: buildRouteTable(),
     approvalBus,
     completionRegistry,
+    localWorkers: options.localWorkers,
   });
 
   return {

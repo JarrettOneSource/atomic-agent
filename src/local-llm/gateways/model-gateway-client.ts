@@ -80,6 +80,7 @@ export class ModelGatewayClient {
         nativeModel: string(details.nativeModel, id),
         state: process?.state ?? "stopped",
         contextSize: number(details.contextSize),
+        parallelSlots: Number.isInteger(details.parallelSlots) && Number(details.parallelSlots) >= 1 && Number(details.parallelSlots) <= 32 ? Number(details.parallelSlots) : 1,
         supportsVision: details.supportsVision === true,
         sizeBytes: number(details.sizeBytes),
         workspacePath: typeof details.workspacePath === "string" ? details.workspacePath : null,

@@ -78,7 +78,7 @@ export class ModelGatewaysOrchestrator {
   async use(hostId: string, modelId: string): Promise<void> {
     if (this.rejectBusySwitch()) return;
     await this.perform(async (signal) => {
-      const { gateway, model, client } = await this.lookup(hostId, modelId, signal);
+      const { gateway, model, client, models } = await this.lookup(hostId, modelId, signal);
       this.status(`Starting ${model.name} on ${gateway.name}…`);
       await client.start(modelId, signal);
       signal.throwIfAborted();
@@ -93,24 +93,26 @@ export class ModelGatewaysOrchestrator {
         const worker = config.providers.find((provider) => provider.id === mode.workerProviderId);
         const workerTarget = worker?.baseUrl
           ? findGatewayTarget(worker.baseUrl, getConfig().localModels.gateways) : null;
-        if (mode.effective === "fusion" && workerTarget?.gateway.id === gateway.id) {
+        const peer = models.find(row => row.id === workerTarget?.modelId);
+        if (mode.effective === "fusion" && workerTarget?.gateway.id === gateway.id && workerTarget.modelId !== model.id && (!peer || (!!model.group && model.group === peer.group))) {
           await this.hooks.runMode.setMode("local");
           solo = true;
         }
       }
-      this.status(`${model.name} is ready on ${gateway.name}${model.kind === "llm" ? " · main model" : ""}.${solo ? " Solo mode: the worker used this host." : ""}`);
+      this.status(`${model.name} is ready on ${gateway.name}${model.kind === "llm" ? " · main model" : ""}.${solo ? " Solo mode: the worker shares this model's exclusive group." : ""}`);
     });
   }
 
   async useWorker(hostId: string, modelId: string): Promise<void> {
     if (this.rejectBusySwitch()) return;
     await this.perform(async (signal) => {
-      const { gateway, model, client } = await this.lookup(hostId, modelId, signal);
+      const { gateway, model, client, models } = await this.lookup(hostId, modelId, signal);
       if (model.kind !== "llm") throw new Error("Choose a chat model for the worker.");
       const main = findGatewayTarget(getConfig().localModels.url, getConfig().localModels.gateways);
       if (!main) throw new Error("Choose a gateway main model first.");
-      if (main.gateway.id === gateway.id) {
-        throw new Error("Choose a worker on another host so it cannot unload the main model.");
+      const peer = main.gateway.id === gateway.id ? models.find(row => row.id === main.modelId) : undefined;
+      if (peer && peer.id !== model.id && model.group && model.group === peer.group) {
+        throw new Error("Main and worker models share an exclusive group; share the main model or choose a compatible model.");
       }
       this.status(`Starting worker ${model.name} on ${gateway.name}…`);
       await client.start(modelId, signal);
@@ -121,9 +123,10 @@ export class ModelGatewaysOrchestrator {
       } else {
         await this.hooks.runtime.reloadLlmProviders();
       }
+      const workers = Math.max(1, Math.min(8, model.parallelSlots ?? 1));
       await this.hooks.runMode.setMode("fusion", { fusion: {
         orchestratorProvider: "local-llama", workerProvider: WORKER_PROVIDER,
-        workers: 1, cloudWorkers: 1,
+        workers, cloudWorkers: workers,
       } });
       this.hooks.refreshProviders();
       this.status(`Fusion enabled · worker ${model.name} on ${gateway.name}.`);
@@ -137,7 +140,8 @@ export class ModelGatewaysOrchestrator {
       await this.hooks.runMode.setMode("local");
       const worker = config.providers.find((provider) => provider.id === WORKER_PROVIDER);
       const target = worker?.baseUrl ? findGatewayTarget(worker.baseUrl, getConfig().localModels.gateways) : null;
-      if (target) await this.stop(target.gateway.id, target.modelId);
+      const main = findGatewayTarget(getConfig().localModels.url, getConfig().localModels.gateways);
+      if (target && (target.gateway.id !== main?.gateway.id || target.modelId !== main.modelId)) await this.stop(target.gateway.id, target.modelId);
       this.status("Solo mode · only the main model will run.");
       return;
     }
@@ -179,14 +183,15 @@ export class ModelGatewaysOrchestrator {
   }
 
   private async lookup(hostId: string, modelId: string, signal: AbortSignal): Promise<{
-    gateway: ModelGatewayDefinition; model: GatewayModel; client: ModelGatewayClient;
+    gateway: ModelGatewayDefinition; model: GatewayModel; client: ModelGatewayClient; models: GatewayModel[];
   }> {
     const gateway = getConfig().localModels.gateways.find((host) => host.id === hostId);
     if (!gateway) throw new Error(`Unknown gateway: ${hostId}`);
     const client = new ModelGatewayClient(gateway);
-    const model = (await client.list(signal)).find((row) => row.id === modelId);
+    const models = await client.list(signal);
+    const model = models.find((row) => row.id === modelId);
     if (!model) throw new Error(`${gateway.name}: model ${modelId} is not installed`);
-    return { gateway, model, client };
+    return { gateway, model, client, models };
   }
 
   private async perform(action: (signal: AbortSignal) => Promise<void>): Promise<void> {

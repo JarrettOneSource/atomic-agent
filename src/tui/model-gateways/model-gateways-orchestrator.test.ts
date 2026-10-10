@@ -123,13 +123,13 @@ describe("Atomic remote model controls", () => {
     expect(pc.requests.filter((path) => path === "GET /upstream/chat/")).toHaveLength(1);
   });
 
-  it("switching models activates the endpoint that actually became ready", async () => {
+  it("switching main to the worker model shares that endpoint and retains Fusion", async () => {
     const m5 = await host("m5"), pc = await host("pc");
     const { manager } = setup([m5.definition, pc.definition]);
     await manager.use("pc", "chat");
     expect(pc.phase()).toBe("ready");
     expect(getConfig().localModels.url).toBe(`${pc.definition.url}/upstream/chat`);
-    expect(getConfig().llm?.runMode?.mode).toBe("local");
+    expect(getConfig().llm?.runMode?.mode).toBe("fusion");
   });
 
   it("worker selection carries the model's inference settings into its provider", async () => {

@@ -16,6 +16,7 @@ export interface GatewayModel {
   nativeModel: string;
   state: GatewayModelState;
   contextSize: number | null;
+  parallelSlots?: number;
   supportsVision: boolean;
   sizeBytes: number | null;
   workspacePath: string | null;
