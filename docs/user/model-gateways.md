@@ -81,6 +81,13 @@ metadata:
   ttlSeconds: 600
 ```
 
+The picker displays `contextSize` as the model's context limit. Keep it and the
+gateway capability's `context` aligned with the runtime's `--ctx-size`. Verify
+the effective `/props` and `/slots` after a change: a runtime may cap the requested
+size at the model's training limit. Loading a large window and answering a short
+prompt checks allocation and serving; it does not measure quality over a full
+window.
+
 Other kinds include `image`, `video` and `decision`. `workspacePath` can contain
 the full private URL of an existing workspace. `group` names models sharing an
 exclusive slot; match it to the gateway's actual routing policy.

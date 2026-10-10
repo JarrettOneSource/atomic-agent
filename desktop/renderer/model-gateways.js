@@ -72,7 +72,7 @@ function paintGatewayDialog() {
     const disabled=!host.online || GATEWAYS.busy || !!conflict;
     const running=model.state!=='stopped';
     const status=host.online ? ({ready:'Ready',starting:'Loading',stopping:'Stopping',failed:'Failed',stopped:'Stopped'}[model.state] || model.state) : 'Offline';
-    const facts=[model.kind,model.sizeBytes ? (model.sizeBytes/1024**3).toFixed(1)+' GiB' : '',model.supportsVision?'Vision':'',model.ttlSeconds?'Unloads after '+Math.round(model.ttlSeconds/60)+' idle minutes':''].filter(Boolean).join(' · ');
+    const facts=[model.kind,model.sizeBytes ? (model.sizeBytes/1024**3).toFixed(1)+' GiB' : '',model.contextSize?Math.round(model.contextSize/1024)+'K context':'',model.supportsVision?'Vision':'',model.ttlSeconds?'Unloads after '+Math.round(model.ttlSeconds/60)+' idle minutes':''].filter(Boolean).join(' · ');
     const startText=model.kind==='llm' ? (model.state==='ready'?'Use':'Start & use') : 'Start';
     const button=(action,label,off)=>'<button class="btn" data-gateway-action="'+action+'" data-host="'+esc(host.gateway.id)+'" data-model="'+esc(model.id)+'"'+(off?' disabled':'')+'>'+label+'</button>';
     return '<article class="gateway-model'+(main?' main':'')+'"><div class="gateway-model-copy"><div class="gateway-model-name">'+esc(model.name)
