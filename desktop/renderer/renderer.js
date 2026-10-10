@@ -3387,6 +3387,7 @@ function setupChipHtml() {
 }
 /** Where · Provider · Model (· Fusion's seats), as the route draws them. */
 function routeChipsHtml(backend) {
+  if (gatewaysConfigured() && (backend === 'custom' || backend === 'fusion')) return gatewayComposerHtml();
   return '<button class="cchip modechip' + cchipOpen('backend') + '" data-sel-open="backend" data-id="' + esc(backend) + '"'
           + ' title="Where it runs: ' + esc(backendWord(backend)) + '" aria-label="Where it runs: ' + esc(backendWord(backend)) + '">'
           + ic(backend === 'cloud' ? 'cloud' : backend === 'custom' ? 'server' : backend === 'fusion' ? 'fusion' : 'laptop')
@@ -15218,6 +15219,7 @@ function selActiveProviderId() {
 }
 
 function openSelector(kind) {
+  if (gatewaysConfigured() && selBackend() !== 'cloud') { openGatewayDialog(); return; }
   /* SELECTOR LANE — `neighbourSwitchKind`'s guard, in the one place this
      window can reach it: "a kind outside the walk (a provider switch somehow
      open on the local route) steps back onto the strip rather than nowhere".
@@ -26925,3 +26927,5 @@ if (typeof window !== 'undefined') {
   const actBeforeAnalytics = act;
   act = function (a) { return ANX.aroundAct(a, actBeforeAnalytics); };
 }
+
+startGatewayUi();

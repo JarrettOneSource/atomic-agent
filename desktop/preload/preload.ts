@@ -7,11 +7,7 @@ import { contextBridge, ipcRenderer } from "electron";
  */
 type Unsubscribe = () => void;
 
-function on(channel: string, cb: (payload: unknown) => void): Unsubscribe {
-  const listener = (_event: unknown, payload: unknown) => cb(payload);
-  ipcRenderer.on(channel, listener);
-  return () => ipcRenderer.removeListener(channel, listener);
-}
+
 
 /* Backlog 03 — what the window put on screen at boot, for `--first-run-probe`
    (main.ts firstRunProbe) and only for it: main adds the argument to that
@@ -70,7 +66,28 @@ function voiceSupportedNow(): boolean {
   }
 }
 
-contextBridge.exposeInMainWorld("atomic", {
+export interface AtomicTransport {
+  invoke(channel: string, ...args: unknown[]): Promise<unknown>;
+  on(channel: string, listener: (event: unknown, payload: unknown) => void): unknown;
+  removeListener(channel: string, listener: (event: unknown, payload: unknown) => void): unknown;
+  send(channel: string, ...args: unknown[]): void;
+  sendSync(channel: string, ...args: unknown[]): unknown;
+}
+export interface AtomicEnvironment {
+  platform: string;
+  freshAtBoot: boolean;
+  voiceSupported: boolean;
+  bootPaint(): unknown;
+}
+
+/** The GUI API is shared; only its transport and host capabilities differ. */
+export function createAtomicApi(ipcRenderer: AtomicTransport, environment: AtomicEnvironment) {
+  function on(channel: string, cb: (payload: unknown) => void): Unsubscribe {
+    const listener = (_event: unknown, payload: unknown) => cb(payload);
+    ipcRenderer.on(channel, listener);
+    return () => ipcRenderer.removeListener(channel, listener);
+  }
+  return {
   /** Process supervision. */
   status: () => ipcRenderer.invoke("agent:status"),
   start: () => ipcRenderer.invoke("agent:start"),
@@ -85,6 +102,9 @@ contextBridge.exposeInMainWorld("atomic", {
   tasks: () => ipcRenderer.invoke("agent:tasks"),
   sessions: () => ipcRenderer.invoke("agent:sessions"),
   models: () => ipcRenderer.invoke("agent:models"),
+  modelGateways: () => ipcRenderer.invoke("agent:modelGateways"),
+  modelGatewayAction: (action: Record<string, unknown>) => ipcRenderer.invoke("agent:modelGatewayAction", action),
+  onGatewayStopAll: (cb: (payload: unknown) => void) => on("agent:gatewayStopAll", cb),
   session: (id: string) => ipcRenderer.invoke("agent:session", id),
   // item 6: DELETE /api/sessions/{id} — the sidebar's delete is a real one
   deleteSession: (id: string) => ipcRenderer.invoke("agent:deleteSession", id),
@@ -231,7 +251,7 @@ contextBridge.exposeInMainWorld("atomic", {
   dotenvSet: (stateDir: string, key: string, value: string | null) =>
     ipcRenderer.invoke("app:dotenvSet", { stateDir, key, value }),
 
-  platform: process.platform,
+  platform: environment.platform,
   /** Windows: repaint the overlaid window controls for the page's theme. */
   setChromeTheme: (dark: boolean) => ipcRenderer.invoke("app:chromeTheme", dark),
   build: () => ipcRenderer.invoke("app:build"),
@@ -248,7 +268,7 @@ contextBridge.exposeInMainWorld("atomic", {
    *  for exactly that; it is NOT a Buffer on the other side). */
   /** False where there is no speech helper (Windows, Linux): the composer
    *  then draws no microphone at all rather than a disabled one. */
-  voiceSupported: voiceSupportedNow(),
+  voiceSupported: environment.voiceSupported,
   voiceProbe: () => ipcRenderer.invoke("voice:probe"),
   voiceStart: (locales: string[]) => ipcRenderer.invoke("voice:start", locales),
   voiceAudio: (chunk: Uint8Array) => ipcRenderer.send("voice:audio", chunk),
@@ -301,9 +321,9 @@ contextBridge.exposeInMainWorld("atomic", {
   firstRun: () => ipcRenderer.invoke("app:firstRun"),
   /** Backlog 03 — `firstRun().fresh`, handed over with the window rather than
    *  asked for, so the renderer can open the wizard before its first paint. */
-  freshAtBoot: process.argv.includes("--atomic-fresh-state"),
+  freshAtBoot: environment.freshAtBoot,
   /** Backlog 03 — the boot frames above; empty unless main armed the probe. */
-  bootPaint: () => BOOT_PAINT,
+  bootPaint: environment.bootPaint,
   tuiSetupPresent: () => ipcRenderer.invoke("app:tuiSetupPresent"),
   importFromTui: (opts: Record<string, boolean>) => ipcRenderer.invoke("app:importFromTui", opts),
   /** r5 item 7 — setup wizard: the streamed runtime phase, the custom-endpoint
@@ -358,4 +378,12 @@ contextBridge.exposeInMainWorld("atomic", {
       /* never thrown at the caller */
     }
   },
-});
+};
+}
+
+contextBridge.exposeInMainWorld("atomic", createAtomicApi(ipcRenderer, {
+  platform: process.platform,
+  freshAtBoot: process.argv.includes("--atomic-fresh-state"),
+  voiceSupported: voiceSupportedNow(),
+  bootPaint: () => BOOT_PAINT,
+}));

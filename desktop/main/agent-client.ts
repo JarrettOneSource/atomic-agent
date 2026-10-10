@@ -888,6 +888,8 @@ export class AgentClient extends EventEmitter {
   }
 
   capabilities = () => this.json<unknown>("/api/capabilities");
+  modelGateways = () => this.json<unknown>("/api/model-gateways");
+  modelGatewayAction = (action: unknown) => this.request<unknown>("POST", "/api/model-gateways", action, 360_000);
   config = () => this.json<unknown>("/api/config");
   skills = () => this.json<unknown>("/api/skills");
   // Item 7 (settings surface): the TUI lists with DEFAULT_LIST_LIMIT = 200

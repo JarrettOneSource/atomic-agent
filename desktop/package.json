@@ -14,7 +14,7 @@
   "type": "commonjs",
   "main": "out/main/main.js",
   "scripts": {
-    "build": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/copy-renderer.mjs && node scripts/build-speech-helper.mjs",
+    "build": "node scripts/ensure-electron.mjs && tsc -p tsconfig.json && node scripts/copy-renderer.mjs && node scripts/build-browser.mjs && node scripts/build-speech-helper.mjs",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test:unit": "node --test test/*.test.mjs",
     "start": "npm run build && electron .",

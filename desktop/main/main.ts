@@ -5,11 +5,11 @@
    take their own side effects. */
 import { DESKTOP_STATE_SEEDED, DESKTOP_STATE_WAS_FRESH, seedFreshStateDir, shouldSeedFreshStateDir } from "./state-dir-boot.js";
 
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell, systemPreferences} from "electron";
+import { app, BrowserWindow, dialog, ipcMain as nativeIpcMain, Notification, shell, systemPreferences} from "electron";
 import { NOTIFY_DEFAULTS, readNotifyConfig, TurnNotifier } from "./turn-notify.js";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";   // item 5: the attachment strip stats what a turn wrote, nothing else
 import { execFile, execFileSync, spawn } from "node:child_process";   // item 2 (voice input): the smoke spawns the speech helper with --probe, and `say` writes its audio fixture
@@ -21,6 +21,16 @@ import { createServer } from "node:http";
 import { promisify } from "node:util";
 
 import { AgentClient } from "./agent-client.js";
+import { IpcBridge } from "./ipc-bridge.js";
+import { BrowserHub } from "./browser-hub.js";
+
+const ipcMain = new IpcBridge(nativeIpcMain);
+const browserPort = Number(process.env.ATOMIC_AGENT_GUI_PORT ?? 0);
+const browserOrigin = process.env.ATOMIC_AGENT_GUI_ORIGIN ?? `http://127.0.0.1:${browserPort}`;
+let browserHub: BrowserHub | null = null;
+let gatewayStopVersion = 0;
+if (process.env.ATOMIC_AGENT_GUI_DATA_DIR) app.setPath("userData", process.env.ATOMIC_AGENT_GUI_DATA_DIR);
+
 import { wireAgentLiveIpc } from "./agent-live.js";
 import { buildMenu } from "./menu.js";
 import { logTail, redactSecrets, scrubText } from "./report-redact.js";
@@ -626,7 +636,8 @@ async function snapshotBootRoute(client: AgentClient): Promise<BootRoute | null>
 }
 
 function send(channel: string, payload?: unknown): void {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+  if (!browserPort && win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, payload);
+  browserHub?.broadcast(channel, payload);
 }
 
 /* --- Item 6 (sidebar): the viewer's own sidebar state ---------------------
@@ -739,7 +750,7 @@ function createWindow(): BrowserWindow {
     // The probe shows its window without taking the keyboard: it runs beside
     // whatever the operator is typing into, and a stray key would end its card.
     if (FIRST_RUN_PROBE) window.showInactive();
-    else window.show();
+    else if (!browserPort) window.show();
     windowShownAt = Date.now();
     A.windowShown();
     if (DEV) window.webContents.openDevTools({ mode: "detach" });
@@ -773,7 +784,7 @@ function createWindow(): BrowserWindow {
     voicePermissionVerdict(permission, details as unknown as { mediaTypes?: string[] } | undefined),
   );
 
-  void window.loadFile(join(__dirname, "..", "renderer", "index.html"));
+  void (browserPort ? window.loadURL("about:blank") : window.loadFile(join(__dirname, "..", "renderer", "index.html")));
   return window;
 }
 
@@ -975,6 +986,7 @@ function wireUpdater(): void {
  */
 async function shutdownForUpdate(): Promise<boolean> {
   voice.kill();
+  if (browserHub) { void browserHub.close(); browserHub = null; }
   stopForQuit();
   const client = agent;
   agent = null;
@@ -1079,6 +1091,20 @@ function wireIpc(client: AgentClient): void {
   resource("tasks", () => client.tasks());
   resource("sessions", () => client.sessions());
   resource("models", () => client.models());
+  resource("modelGateways", () => client.modelGateways());
+  ipcMain.handle("agent:modelGatewayAction", async (_event, action: unknown) => {
+    if (action && typeof action === "object" && "action" in action && action.action === "stop-all") {
+      gatewayStopVersion++;
+      keptQueues = {};
+      send("agent:gatewayStopAll", { version: gatewayStopVersion });
+    }
+    try {
+      const run = () => client.modelGatewayAction(action);
+      const stop = action && typeof action === "object" && "action" in action && (action.action === "stop" || action.action === "stop-all");
+      return { ok: true, data: await (stop ? run() : withConfigLock(run)) };
+    }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+  });
   ipcMain.handle("agent:session", (_event, id: unknown) =>
     typeof id === "string" ? client.session(id).then((data) => ({ ok: true, data })).catch((e) => ({ ok: false, error: String(e) })) : { ok: false, error: "id required" },
   );
@@ -1197,15 +1223,21 @@ function wireIpc(client: AgentClient): void {
     }
   });
 
-  ipcMain.handle("app:chooseWorkspace", async () => {
+  ipcMain.handle("app:chooseWorkspace", async (_event, requested: unknown) => {
     if (!win) return null;
-    const picked = await dialog.showOpenDialog(win, {
-      properties: ["openDirectory", "createDirectory"],
-      defaultPath: client.status.workingDir,
-      message: "Choose the folder the agent may work in",
-    });
-    if (picked.canceled || !picked.filePaths[0]) return null;
-    const dir = picked.filePaths[0];
+    let dir: string;
+    if (typeof requested === "string") {
+      if (!isAbsolute(requested) || !(await stat(requested)).isDirectory()) throw new Error("Choose an existing workspace folder");
+      dir = requested;
+    } else {
+      const picked = await dialog.showOpenDialog(win, {
+        properties: ["openDirectory", "createDirectory"],
+        defaultPath: client.status.workingDir,
+        message: "Choose the folder the agent may work in",
+      });
+      if (picked.canceled || !picked.filePaths[0]) return null;
+      dir = picked.filePaths[0];
+    }
     A.workspaceChosen(dir);
     // Telling the user to restart while the child keeps its old cwd is a lie;
     // move it here instead.
@@ -1942,7 +1974,7 @@ function wireIpc(client: AgentClient): void {
     return { busy, turns, answered, state: client.status.state };
   });
   // 0.6.6 live routes: MCP restart / enable / disable and the deep-merge config patch.
-  wireAgentLiveIpc(client);
+  wireAgentLiveIpc(client, ipcMain);
   // The menu's Quit: the app quits and `before-quit` stops the agent, as the TUI's /quit does.
   ipcMain.handle("app:quit", () => { app.quit(); });
   ipcMain.handle("cli:taskCreate", (_event, input: unknown) => {
@@ -3651,6 +3683,7 @@ async function smokeTest(): Promise<void> {
 function exitAfterAgentStop(code: number): void {
   // The same steps as before-quit, in its order, bounded as a whole.
   voice.kill();
+  if (browserHub) { void browserHub.close(); browserHub = null; }
   stopForQuit();
   const client = agent;
   agent = null;
@@ -9184,6 +9217,23 @@ void app.whenReady().then(async () => {
     });
   });
 
+  if (browserPort) {
+    browserHub = new BrowserHub({
+      port: browserPort, origin: browserOrigin,
+      rendererDir: join(__dirname, "..", "renderer"),
+      platform: process.platform, freshAtBoot: DESKTOP_STATE_WAS_FRESH,
+      stopVersion: () => gatewayStopVersion,
+      queues: () => win && !win.isDestroyed() ? ipcMain.send("app:queuesTake", [], win.webContents) : {},
+      downloadRoots: () => [homedir(), agent?.status.workingDir ?? workspace],
+      call: (kind, channel, args) => {
+        if (!win || win.isDestroyed()) throw new Error("The GUI is restarting");
+        return kind === "invoke" ? ipcMain.invoke(channel, args, win.webContents) : ipcMain.send(channel, args, win.webContents);
+      },
+    });
+    await browserHub.start();
+    if (process.platform === "darwin") app.dock?.hide();
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       win = createWindow();
@@ -9213,6 +9263,11 @@ let quitShutdown: { done: boolean } | null = null;
    kept across a closed window, not across a quit. Once per quit. */
 let queuedQuitAsked = false;
 
+// Service restarts use the same bounded child shutdown as the desktop Quit.
+if (browserPort) {
+  for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"] as const) process.on(signal, () => app.quit());
+}
+
 // Never leave the agent running after the app is gone.
 app.on("before-quit", (event) => {
   /* Off macOS the last window closing is the quit: asked then, a Cancel would
@@ -9221,7 +9276,7 @@ app.on("before-quit", (event) => {
      stopped for it already, and a Cancel would leave the install half done. */
   const windowUp = !!win && !win.isDestroyed();
   const installing = appUpdater()?.state().phase === "installing";
-  if (!SMOKE && !FIRST_RUN_PROBE && !quitShutdown && !queuedQuitAsked && !installing && (windowUp || process.platform === "darwin")) {
+  if (!browserPort && !SMOKE && !FIRST_RUN_PROBE && !quitShutdown && !queuedQuitAsked && !installing && (windowUp || process.platform === "darwin")) {
     const n = queuedMessageCount();
     if (n > 0) {
       const opts = {
@@ -9242,6 +9297,7 @@ app.on("before-quit", (event) => {
   // the degraded state in which someone is most likely to be poking at the
   // microphone button.
   voice.kill();
+  if (browserHub) { void browserHub.close(); browserHub = null; }
   stopForQuit();
   // Analytics: app_closed and a last flush, bounded (2 s); idempotent across repeated Quits.
   const analyticsClosed = A.appClosing();

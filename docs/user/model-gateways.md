@@ -9,8 +9,14 @@ Only requested model processes consume GPU memory.
 
 ## Use the hub
 
-Open `/model`, then **Gateways** under Manage → LLM. Configured gateway routes
-select this pane automatically.
+In the GUI, click the model name below the chat box to open **Models**. Each host
+shows its installed models, status, and **Start & use**, **Worker** and **Stop**
+actions. **Use Solo** disables the worker; **Stop all** cancels tasks and unloads
+reachable hosts. The GUI uses the same controller through the browser bridge
+described in [the desktop guide](../../desktop/README.md#private-browser-hub).
+
+The terminal remains available: open `/model`, then **Gateways** under Manage →
+LLM. Configured gateway routes select this pane automatically. Keyboard controls:
 
 - **Enter / Start:** load the selected model. Chat models also become the main
   agent model; other kinds keep the chat route unchanged.
@@ -105,7 +111,7 @@ connect the hub and workspaces. `captureBuffer: 0` disables request/response
 capture; omit persistent metric storage and keep model output out of log files.
 Atomic conversations and memory remain in its state folder.
 
-The weekly GitHub Actions workflow prepares an upstream update branch, runs the
+The weekly GitHub Actions workflow merges upstream main and the latest stable desktop release into an update branch, runs the
 test workflow against it, and opens or updates a review PR. Conflicts and failed
 checks produce a draft. It never connects to or deploys model hosts.
 `automation/upstream-sync` belongs to that workflow; make human changes on the
@@ -128,9 +134,14 @@ npm run imports:check
 npm run docs:check
 npm test
 npm run build
+npm ci --prefix desktop
+npm run build --prefix desktop
+npm run test:unit --prefix desktop
 ```
 
-Restart the Atomic TUI after its current tasks finish, using your process manager.
+Restart the GUI controller after its current tasks finish, using your process
+manager. Use the same state folder and only one controller; do not leave a
+terminal runtime active against that folder during the GUI cutover.
 The gateways and model weights do not need to restart for an Atomic-only update.
 Keep machine-specific gateway configuration and service definitions outside this
 checkout. If the change updates gateway protocols or launch profiles, repeat the

@@ -1,0 +1,24 @@
+.gateway-dialog{width:min(1100px,calc(100vw - 48px));max-height:88vh;padding:24px;border:1px solid var(--divider);border-radius:20px;background:var(--lift);color:var(--ink);box-shadow:var(--sh-pop);font:14px/1.45 var(--font-ui)}
+.gateway-dialog::backdrop{background:#11182755;backdrop-filter:blur(4px)}
+.gateway-dialog header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
+.gateway-dialog h2{margin:0;font-size:23px;font-weight:650;letter-spacing:-.03em}
+.gateway-dialog header p{margin:6px 0 16px;color:var(--ink-2)}
+.gateway-mode{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--divider)}
+.gateway-mode>div,.gateway-actions{display:flex;gap:6px;align-items:center}
+.gateway-notice{min-height:25px;padding-top:10px;color:var(--ink-2)}
+.gateway-hosts{overflow:auto;max-height:62vh;padding-right:4px}
+.gateway-hosts section{margin-top:10px}
+.gateway-hosts h3{display:flex;align-items:center;gap:12px;font-size:14px;margin:14px 0 8px}
+.gateway-hosts h3>span{color:var(--ink-3);font-size:12px;font-weight:400}
+.gateway-model{display:flex;align-items:center;gap:14px;border:1px solid var(--divider);border-radius:12px;padding:13px;margin-bottom:7px;background:var(--well)}
+.gateway-model.main{border-color:var(--brand)}
+.gateway-model-copy{flex:1;min-width:0}
+.gateway-model-name{font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.gateway-facts{font-size:12px;color:var(--ink-2);margin-top:4px}
+.gateway-tag{font-size:10px;border-radius:5px;padding:2px 5px;background:var(--brand-wash);color:var(--brand);font-weight:500}
+.gateway-state{font-size:12px;color:var(--ink-3);min-width:52px;text-align:right}
+.gateway-state.ready{color:var(--green,#158060)}
+.gateway-actions .btn,.gateway-mode .btn{font-size:12px;padding:6px 9px;white-space:nowrap}
+.gateway-dialog .danger{color:var(--critical)}
+.gateway-dialog button:disabled{opacity:.4;cursor:default}
+@media(max-width:850px){.gateway-model{flex-wrap:wrap}.gateway-model-copy{min-width:65%}.gateway-actions{margin-left:auto}.gateway-mode{align-items:flex-start;flex-direction:column}}

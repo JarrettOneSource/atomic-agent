@@ -604,6 +604,7 @@ export async function createAgentRuntime(
     execution: { loop, turnController, steeringInbox, shellJobs, slotManager, llmComplete },
     inference: {
       providerRegistry, resolveActiveLlmSlice, resolveCurrentRunMode, resolveRouteVision, resolveActiveModelName, fallbackChain,
+      waitForGatewayControls: (signal) => gatewayTasks.waitForModelChanges(signal),
       prepareGatewayModels: (ids, signal) => {
         const fresh = getConfig();
         const providers = resolveLlmConfig(fresh).providers;

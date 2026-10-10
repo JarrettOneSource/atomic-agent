@@ -2,12 +2,13 @@ import { getConfig } from "../../config/index.js";
 import { upsertLlmProvider } from "../../config/llm-provider-commands.js";
 import { resolveLlmConfig } from "../../llm/provider/registry/provider-registry.js";
 import { resolveRunMode } from "../../llm/run-mode/index.js";
+import { gatewayWorkerProvider } from "../../local-llm/gateways/gateway-worker-provider.js";
 import { ModelGatewayClient } from "../../local-llm/gateways/model-gateway-client.js";
 import { findGatewayTarget } from "../../local-llm/gateways/gateway-target.js";
 import type { GatewayModel, ModelGatewayDefinition, ModelGatewaySnapshot } from "../../local-llm/gateways/model-gateway-types.js";
 import type { AgentRuntime } from "../../runtime/bootstrap.js";
 import type { TuiAction } from "../tui-action.js";
-import { ModelOperationQueue } from "../local-models/model-operation-queue.js";
+import { ModelOperationQueue } from "../../local-llm/model-operation-queue.js";
 import type { RunModeOrchestrator } from "../run-mode/run-mode-orchestrator.js";
 
 const WORKER_PROVIDER = "gateway-worker";
@@ -114,21 +115,7 @@ export class ModelGatewaysOrchestrator {
       this.status(`Starting worker ${model.name} on ${gateway.name}…`);
       await client.start(modelId, signal);
       signal.throwIfAborted();
-      upsertLlmProvider({
-        id: WORKER_PROVIDER,
-        kind: "openai-compatible",
-        baseUrl: client.inferenceUrl(modelId),
-        defaultChatModel: model.nativeModel,
-        ...(gateway.apiKeyEnv ? { apiKeyEnv: gateway.apiKeyEnv } : {}),
-        supportsTools: true,
-        userModels: [{
-          id: model.nativeModel,
-          kind: "chat",
-          supportsTools: "parallel",
-          ...(model.chatParams ? { params: model.chatParams } : {}),
-          ...(model.contextSize ? { contextWindow: model.contextSize } : {}),
-        }],
-      });
+      upsertLlmProvider(gatewayWorkerProvider(gateway, model));
       if (this.hooks.runtime.providerRegistry.listIds().includes(WORKER_PROVIDER)) {
         await this.hooks.runtime.reloadLlmProvider(WORKER_PROVIDER);
       } else {

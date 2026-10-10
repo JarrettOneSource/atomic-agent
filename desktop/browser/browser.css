@@ -1,0 +1,12 @@
+.hub-context-menu {
+  position:fixed; margin:0; min-width:210px; padding:6px; border:1px solid #454b56;
+  border-radius:10px; background:var(--lift,#20242b); color:var(--ink,#e8ebef); box-shadow:0 8px 30px #0006;
+  font:inherit;
+}
+.hub-context-menu::backdrop { background:transparent; }
+.hub-context-menu button {
+  display:block; width:100%; border:0; background:transparent; color:inherit;
+  padding:9px 12px; text-align:left; border-radius:6px; font:inherit; cursor:pointer;
+}
+.hub-context-menu button:hover, .hub-context-menu button:focus-visible { background:#ffffff18; }
+.hub-context-menu button:disabled { opacity:.4; cursor:default; }

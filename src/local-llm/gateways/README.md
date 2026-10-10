@@ -21,7 +21,10 @@ Stop before starting another model in that group. See
 `GatewayTaskManager` owns task leases. The shared runtime prepares providers for
 each actual turn, including scheduled turns and pinned Fusion workers. Leases
 keep models warm during long tools, honor cancellation, and end with the turn.
-Status polling never acquires a lease. Health lease requests must be configured
+Model changes share its operation queue; new turns wait before selecting their
+providers, and Stop supersedes an in-flight load. HTTP controls use
+`gateway-selection.ts` to persist the main/worker route together and reload the
+runtime provider registry. Status polling never acquires a lease. Health lease requests must be configured
 as non-autoloading paths so they cannot undo an operator's Stop.
 
 `gateway-target.ts` recognizes only configured gateway URLs. Other external and

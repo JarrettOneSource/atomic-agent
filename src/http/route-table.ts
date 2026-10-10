@@ -1,4 +1,5 @@
 import { createSessionCompactionHandler } from "./route-compaction.js";
+import { createModelGatewayHandlers } from "./route-model-gateways.js";
 import type { RouteDefinition } from "./http-server.js";
 
 import { createChatCompletionsHandler } from "./openai-chat-completions.js";
@@ -56,7 +57,10 @@ export function buildRouteTable(): RouteDefinition[] {
   // state, and the live switches cannot be read back as the mode that
   // set them (see route-coding-mode.ts `inferMode`).
   const codingMode = createCodingModeHandlers();
+  const gateways = createModelGatewayHandlers();
   return [
+    { method: "GET", path: "/api/model-gateways", handler: gateways.list },
+    { method: "POST", path: "/api/model-gateways", handler: gateways.action },
     {
       method: "GET",
       path: "/health",

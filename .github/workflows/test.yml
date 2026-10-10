@@ -153,3 +153,25 @@ jobs:
       - name: Check media idle lifecycle
         if: matrix.drop_canvas == 'false'
         run: python3 scripts/gateways/test_media_idle.py
+
+  desktop:
+    name: Desktop and browser GUI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "25.7"
+          check-latest: true
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:unit

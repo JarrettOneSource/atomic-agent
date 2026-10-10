@@ -10,6 +10,7 @@ This area owns http and openai-compatible ingress. Read [AGENTS.md](AGENTS.md) b
 - [http-server.ts](http-server.ts)
 - [route-sessions.ts](route-sessions.ts)
 - [route-mcp.ts](route-mcp.ts)
+- [route-model-gateways.ts](route-model-gateways.ts): authenticated catalog and model controls.
 - [request-context.ts](request-context.ts)
 - [openai-completions-cancel.ts](openai-completions-cancel.ts)
 
@@ -26,3 +27,7 @@ Read README.md and ../runtime/docs/lifecycle.md for session/stream/steering chan
 `npx vitest run src/http`; `npm run lint`; `npm run docs:check`. The production typecheck excludes tests; see [development checks](../../docs/development.md).
 
 [Compaction routes](route-compaction.ts) expose `POST /api/sessions/{id}/compact` and `GET /api/sessions/{id}/compaction`. The POST waits for runtime completion and cancels only its operation on disconnect. See [the shared contract](../runtime/docs/compaction.md).
+
+Gateway selection waits on the runtime-owned model operation queue before new
+turns resolve providers. Stop all cancels HTTP completions and gateway leases
+before unloading hosts; catalog reads do not acquire a lease or load a model.

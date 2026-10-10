@@ -1,5 +1,7 @@
 import { ipcMain } from "electron";
 
+import type { IpcBridge } from "./ipc-bridge.js";
+
 import type { AgentClient } from "./agent-client.js";
 import { withConfigLock } from "./agent-cli.js";
 
@@ -40,10 +42,10 @@ export async function agentHasLiveRoutes(client: AgentClient): Promise<boolean> 
   }
 }
 
-export function wireAgentLiveIpc(client: AgentClient): void {
+export function wireAgentLiveIpc(client: AgentClient, registrar: Pick<IpcBridge, "handle"> = ipcMain): void {
   /* The patch queues on the same lock as every CLI config write, so it
      cannot interleave with a whole-file write in flight. */
-  ipcMain.handle("agent:configPatch", (_event, patch: unknown): Promise<LiveResult<unknown>> => {
+  registrar.handle("agent:configPatch", (_event, patch: unknown): Promise<LiveResult<unknown>> => {
     if (!isPlainObject(patch)) return Promise.resolve({ ok: false, error: "patch must be an object" });
     return withConfigLock(async (): Promise<LiveResult<unknown>> => {
       if (!(await agentHasLiveRoutes(client))) {
@@ -57,7 +59,7 @@ export function wireAgentLiveIpc(client: AgentClient): void {
     });
   });
 
-  ipcMain.handle("agent:mcpServer", async (_event, payload: unknown): Promise<LiveResult<unknown>> => {
+  registrar.handle("agent:mcpServer", async (_event, payload: unknown): Promise<LiveResult<unknown>> => {
     const { name, op } = (payload ?? {}) as { name?: unknown; op?: unknown };
     if (typeof name !== "string" || !MCP_NAME_RE.test(name)) return { ok: false, error: "server name required" };
     if (op !== "restart" && op !== "enable" && op !== "disable") return { ok: false, error: "op must be restart, enable or disable" };

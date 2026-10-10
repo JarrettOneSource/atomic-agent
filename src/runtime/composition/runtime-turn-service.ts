@@ -71,6 +71,7 @@ export interface RuntimeTurnDependencies {
     llmComplete: (params: LlmStreamParams) => Promise<CompletionResult>;
   };
   inference: {
+    waitForGatewayControls?(signal?: AbortSignal): Promise<void>;
     prepareGatewayModels?(providerIds: string[], signal?: AbortSignal): Promise<GatewayTaskLease>;
     providerRegistry: Pick<ProviderRegistry, "getProvider" | "activeText">;
     resolveActiveLlmSlice: RuntimeProviders["resolveActiveLlmSlice"];
@@ -318,6 +319,7 @@ export function createRuntimeTurnService(
     assertKnownProvider(runOptions.providerId);
     let gatewayLease: GatewayTaskLease | undefined;
     if (getConfig().localModels.gateways.length && deps.inference.prepareGatewayModels) {
+      await deps.inference.waitForGatewayControls?.(runOptions.signal);
       const selected = runOptions.providerId ?? resolveLlmConfig(getConfig()).activeTextProvider;
       const mode = resolveCurrentRunMode();
       const ids = [selected, ...(mode.effective === "fusion" && selected === mode.orchestratorProviderId

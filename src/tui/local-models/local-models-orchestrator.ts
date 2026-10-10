@@ -1,4 +1,4 @@
-import { ModelOperationQueue } from "./model-operation-queue.js";
+import { ModelOperationQueue } from "../../local-llm/model-operation-queue.js";
 import { totalmem } from "node:os";
 
 import { getConfig, resetConfigCache } from "../../config/index.js";

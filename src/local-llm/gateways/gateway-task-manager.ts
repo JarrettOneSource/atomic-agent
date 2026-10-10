@@ -1,6 +1,7 @@
 import { ModelGatewayClient } from "./model-gateway-client.js";
 import { findGatewayTarget } from "./gateway-target.js";
 import type { ModelGatewayDefinition } from "./model-gateway-types.js";
+import { ModelOperationQueue } from "../model-operation-queue.js";
 
 export interface GatewayTaskLease {
   signal: AbortSignal;
@@ -27,10 +28,21 @@ export interface GatewayTaskManagerOptions {
 export class GatewayTaskManager {
   private readonly tasks = new Set<GatewayTask>();
   private closed = false;
+  private readonly changes = new ModelOperationQueue();
+  private readonly lifetime = new AbortController();
 
   constructor(private readonly options: GatewayTaskManagerOptions) {}
 
   get activeCount(): number { return this.tasks.size; }
+  get controlsBusy(): boolean { return this.changes.busy; }
+
+  changeModels<T>(change: (signal: AbortSignal) => Promise<T>, cancelled: T): Promise<T> {
+    return this.changes.run(change, cancelled);
+  }
+
+  waitForModelChanges(signal?: AbortSignal): Promise<void> {
+    return this.changes.waitForSwitch(signal ? AbortSignal.any([signal, this.lifetime.signal]) : this.lifetime.signal);
+  }
 
   async prepare(urls: readonly string[], parentSignal?: AbortSignal): Promise<GatewayTaskLease> {
     if (this.closed) throw new Error("Gateway task manager is closed");
@@ -109,6 +121,8 @@ export class GatewayTaskManager {
 
   close(): void {
     this.closed = true;
+    this.lifetime.abort();
+    void this.changes.close();
     for (const task of this.tasks) task.release();
   }
 }

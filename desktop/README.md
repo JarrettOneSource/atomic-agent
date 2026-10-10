@@ -14,6 +14,42 @@ npm start
 `npm start` builds and launches. `npm run dev` adds detached DevTools.
 `npm run smoke` runs the whole thing headlessly and asserts it works (below).
 
+## Private browser hub
+
+The fork can serve this same GUI through a private browser transport. Build the
+root agent and this desktop package, then run Electron with:
+
+```sh
+ATOMIC_AGENT_GUI_PORT=8890 \
+ATOMIC_AGENT_GUI_ORIGIN=https://your-private-host.example \
+ATOMIC_AGENT_STATE_DIR=/path/to/agent-state \
+ATOMIC_AGENT_GUI_DATA_DIR=/path/to/gui-state \
+ATOMIC_AGENT_BIN=/path/to/atag \
+npm start
+```
+
+The listener binds to loopback. Put it behind a private HTTPS proxy such as
+Tailscale Serve. Access to that private URL grants control of the agent; it is a
+single-user hub, not a public multi-user service. The browser session cookie,
+request token, host/origin checks and method allowlist protect the HTTP bridge.
+
+Browser mode keeps one hidden Electron sender context and one `atag serve`
+child. It loads the original renderer with the API generated from the native
+preload factory; there is no separate agent implementation. Closing or reloading
+a browser leaves active work with that controller. Open its chat from the sidebar
+to resume the transcript and any pending approval. Controller restarts cancel
+active work and retain the agent's persisted conversations.
+
+File links download from the hub, workspace selection accepts an absolute folder
+on the hub, and context menus open in the browser. Desktop microphone input is
+unavailable in browser mode. Configured remote models use the shared
+[model gateway controls](../docs/user/model-gateways.md), including on-demand
+loading, Solo/Fusion selection and Stop all. Status refreshes never load models.
+
+`npm run build` generates the browser bridge and channel manifest.
+`npm run test:unit` includes HTTP authorization, streaming, downloads and native
+IPC dispatch checks. Machine-specific launch profiles stay outside the repo.
+
 ## How it talks to the agent
 
 One child process, one transport. The main process spawns

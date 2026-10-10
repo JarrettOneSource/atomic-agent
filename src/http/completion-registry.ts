@@ -38,4 +38,9 @@ export class CompletionRegistry {
   size(): number {
     return this.entries.size;
   }
+
+  cancelAll(): void {
+    for (const entry of this.entries.values()) entry.controller.abort();
+    this.entries.clear();
+  }
 }

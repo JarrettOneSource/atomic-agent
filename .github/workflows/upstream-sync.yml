@@ -36,19 +36,29 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git remote add upstream https://github.com/AtomicBot-ai/atomic-agent.git
           git fetch --no-tags upstream main
-          if git merge-base --is-ancestor upstream/main HEAD; then
+          git fetch upstream '+refs/tags/desktop-v*:refs/tags/upstream-desktop-v*'
+          desktop=$(git tag --list 'upstream-desktop-v*' --sort=-v:refname | awk '/^upstream-desktop-v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')
+          if [ -z "$desktop" ]; then
+            echo '::error::No stable upstream desktop release was found'
+            exit 1
+          fi
+          if git merge-base --is-ancestor upstream/main HEAD && git merge-base --is-ancestor "$desktop" HEAD; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git switch -C "$SYNC_BRANCH"
           conflict=false
-          if ! git merge --no-ff --no-edit upstream/main; then
-            git merge --abort
-            # A draft PR against the custom branch exposes GitHub's conflict
-            # list without discarding or deploying any custom-branch changes.
-            git switch -C "$SYNC_BRANCH" upstream/main
-            conflict=true
-          fi
+          for source in upstream/main "$desktop"; do
+            if git merge-base --is-ancestor "$source" HEAD; then continue; fi
+            if ! git merge --no-ff --no-edit "$source"; then
+              git merge --abort
+              # A draft exposes this source's merge conflicts for review. After
+              # resolution the next run brings in any remaining source.
+              git switch -C "$SYNC_BRANCH" "$source"
+              conflict=true
+              break
+            fi
+          done
           # This branch belongs exclusively to the update workflow. The lease
           # prevents a push racing another writer; the custom branch is untouched.
           git push --force-with-lease origin "HEAD:refs/heads/$SYNC_BRANCH"
@@ -91,7 +101,7 @@ jobs:
           conflict = os.environ['SYNC_CONFLICT'] == 'true'
           validation = 'Merge conflicts need resolution; checks were not run.' if conflict else 'Validation: ' + os.environ['VALIDATION_RESULT'] + '.'
           Path('body.md').write_text(
-              'Updates the Atomic fork with changes from AtomicBot-ai/atomic-agent.\n\n'
+              'Updates the Atomic fork from upstream main and the latest stable desktop release.\n\n'
               + validation + '\n\n'
               + '[Workflow results](' + os.environ['SYNC_RUN_URL'] + ')\n\n'
               + 'Review and merge this PR before rebuilding and restarting the hub. '
