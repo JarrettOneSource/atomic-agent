@@ -1,0 +1,41 @@
+name: GUI checks
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit to validate
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+
+  desktop:
+    name: Desktop and browser GUI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "25.7"
+          check-latest: true
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:unit
